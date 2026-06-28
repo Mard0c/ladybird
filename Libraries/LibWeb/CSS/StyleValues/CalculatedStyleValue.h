@@ -10,13 +10,12 @@
 #pragma once
 
 #include <AK/Function.h>
-#include <LibWeb/CSS/AcceptedTypeRange.h>
 #include <LibWeb/CSS/Angle.h>
-#include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/Flex.h>
 #include <LibWeb/CSS/Frequency.h>
 #include <LibWeb/CSS/Length.h>
 #include <LibWeb/CSS/Number.h>
+#include <LibWeb/CSS/NumericRange.h>
 #include <LibWeb/CSS/NumericType.h>
 #include <LibWeb/CSS/Percentage.h>
 #include <LibWeb/CSS/Resolution.h>
@@ -31,7 +30,8 @@ namespace Web::CSS {
 struct CalculationContext {
     Optional<ValueType> percentages_resolve_as {};
     bool resolve_numbers_as_integers = false;
-    AcceptedTypeRangeMap accepted_type_ranges {};
+    // FIXME: Once calc() parsing knows the target numeric type, pass a single NumericRange instead of the full accepted range set.
+    NumericRangesByValueType accepted_ranges_by_type {};
 
     static CalculationContext for_property(PropertyNameAndID const&);
 };
@@ -71,9 +71,10 @@ public:
         return adopt_ref(*new (nothrow) CalculatedStyleValue(move(calculation), move(resolved_type), move(context)));
     }
 
-    virtual String to_string(SerializationMode) const override;
+    virtual void serialize(StringBuilder&, SerializationMode) const override;
     virtual ValueComparingNonnullRefPtr<StyleValue const> absolutized(ComputationContext const&) const override;
     virtual bool equals(StyleValue const& other) const override;
+    virtual bool is_computationally_independent() const override;
 
     NonnullRefPtr<CalculationNode const> calculation() const { return m_calculation; }
 
@@ -91,6 +92,7 @@ public:
     bool resolves_to_length() const { return m_resolved_type.matches_length(m_context.percentages_resolve_as); }
     bool resolves_to_length_percentage() const { return m_resolved_type.matches_length_percentage(m_context.percentages_resolve_as); }
     Optional<Length> resolve_length(CalculationResolutionContext const&) const;
+    Optional<double> resolve_raw_length(CalculationResolutionContext const&) const;
 
     bool resolves_to_percentage() const { return m_resolved_type.matches_percentage(); }
     Optional<Percentage> resolve_percentage(CalculationResolutionContext const&) const;
@@ -104,15 +106,16 @@ public:
 
     bool resolves_to_number() const { return m_resolved_type.matches_number(m_context.percentages_resolve_as); }
     Optional<double> resolve_number(CalculationResolutionContext const&) const;
-    Optional<i64> resolve_integer(CalculationResolutionContext const&) const;
+    Optional<i32> resolve_integer(CalculationResolutionContext const&) const;
 
     bool resolves_to_dimension() const { return m_resolved_type.matches_dimension(); }
 
     bool contains_percentage() const;
+    bool is_fully_simplified() const;
 
     String dump() const;
 
-    virtual GC::Ref<CSSStyleValue> reify(JS::Realm&, FlyString const& associated_property) const override;
+    virtual GC::Ref<CSSStyleValue> reify(JS::Realm&, Utf16FlyString const& associated_property) const override;
 
 private:
     explicit CalculatedStyleValue(NonnullRefPtr<CalculationNode const> calculation, NumericType resolved_type, CalculationContext context)
@@ -131,7 +134,7 @@ private:
     //        being called so we can take just the percentage_basis rather than a full CalculationResolutionContext.
     //        There are still some CalculatedStyleValues which we don't call absolutized for (i.e. sub-values of other
     //        StyleValue classes which lack their own absolutized method) which will need to be fixed beforehand.
-    Optional<ResolvedValue> resolve_value(CalculationResolutionContext const&) const;
+    Optional<ResolvedValue> resolve_value(CalculationResolutionContext const&, bool apply_censoring_and_clamping = true) const;
 
     Optional<ValueType> percentage_resolved_type() const;
 
@@ -140,62 +143,56 @@ private:
     CalculationContext m_context;
 };
 
+#define ENUMERATE_CALCULATION_NODE_TYPES(X) \
+    X(Numeric)                              \
+    X(Min)                                  \
+    X(Max)                                  \
+    X(Clamp)                                \
+    X(Sum)                                  \
+    X(Product)                              \
+    X(Progress)                             \
+    X(Negate)                               \
+    X(Invert)                               \
+    X(Abs)                                  \
+    X(Sign)                                 \
+    X(Sin)                                  \
+    X(Cos)                                  \
+    X(Tan)                                  \
+    X(Asin)                                 \
+    X(Acos)                                 \
+    X(Atan)                                 \
+    X(Atan2)                                \
+    X(Pow)                                  \
+    X(Sqrt)                                 \
+    X(Hypot)                                \
+    X(Log)                                  \
+    X(Exp)                                  \
+    X(Round)                                \
+    X(Mod)                                  \
+    X(Rem)                                  \
+    X(Random)                               \
+    X(NonMathFunction)
+
 // https://www.w3.org/TR/css-values-4/#calculation-tree
 class CalculationNode : public RefCounted<CalculationNode> {
 public:
+    // NOTE: Currently, any value with a `var()` or `attr()` function in it is always an
+    //       UnresolvedStyleValue so we do not have to implement them as CalculationNodes.
+
     enum class Type {
-        Numeric,
-        // NOTE: Currently, any value with a `var()` or `attr()` function in it is always an
-        //       UnresolvedStyleValue so we do not have to implement them as CalculationNodes.
-
-        // Comparison function nodes, a sub-type of operator node
-        // https://drafts.csswg.org/css-values-4/#comp-func
-        Min,
-        Max,
-        Clamp,
-
-        // Calc-operator nodes, a sub-type of operator node
-        // https://www.w3.org/TR/css-values-4/#calculation-tree-calc-operator-nodes
-        Sum,
-        Product,
-        Negate,
-        Invert,
-
-        // Sign-Related Functions, a sub-type of operator node
-        // https://drafts.csswg.org/css-values-4/#sign-funcs
-        Abs,
-        Sign,
-
-        // Trigonometric functions, a sub-type of operator node
-        // https://drafts.csswg.org/css-values-4/#trig-funcs
-        Sin,
-        Cos,
-        Tan,
-        Asin,
-        Acos,
-        Atan,
-        Atan2,
-
-        // Exponential functions, a sub-type of operator node
-        // https://drafts.csswg.org/css-values-4/#exponent-funcs
-        Pow,
-        Sqrt,
-        Hypot,
-        Log,
-        Exp,
-
-        // Stepped value functions, a sub-type of operator node
-        // https://drafts.csswg.org/css-values-4/#round-func
-        Round,
-        Mod,
-        Rem,
-
-        // Non-math functions
-        NonMathFunction
+#define ENUMERATE_TYPE(name) name,
+        ENUMERATE_CALCULATION_NODE_TYPES(ENUMERATE_TYPE)
+#undef ENUMERATE_TYPE
     };
+
+    template<typename T>
+    bool fast_is() const = delete;
+
     using NumericValue = CalculatedStyleValue::CalculationResult::Value;
 
     virtual ~CalculationNode();
+
+    static NonnullRefPtr<CalculationNode const> from_style_value(NonnullRefPtr<StyleValue const> const&, CalculationContext const&);
 
     Type type() const { return m_type; }
 
@@ -221,6 +218,7 @@ public:
         case Type::Atan:
         case Type::Atan2:
         case Type::Pow:
+        case Type::Progress:
         case Type::Sqrt:
         case Type::Hypot:
         case Type::Log:
@@ -228,6 +226,7 @@ public:
         case Type::Round:
         case Type::Mod:
         case Type::Rem:
+        case Type::Random:
             return true;
 
         default:
@@ -252,6 +251,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const = 0;
     virtual bool equals(CalculationNode const&) const = 0;
+    virtual bool is_computationally_independent() const = 0;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const { return nullptr; }
 
 protected:
@@ -280,6 +280,7 @@ public:
 
     virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return {}; }
     NumericValue const& value() const { return m_value; }
+    void serialize_value(StringBuilder&) const;
     String value_to_string() const;
 
     Optional<NonFiniteValue> infinite_or_nan_value() const;
@@ -288,6 +289,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -307,6 +309,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -326,11 +329,38 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
     ProductCalculationNode(Vector<NonnullRefPtr<CalculationNode const>>, Optional<NumericType>);
     Vector<NonnullRefPtr<CalculationNode const>> m_values;
+};
+
+class ProgressCalculationNode final : public CalculationNode {
+public:
+    static NonnullRefPtr<ProgressCalculationNode const> create(bool no_clamp, NonnullRefPtr<CalculationNode const> value, NonnullRefPtr<CalculationNode const> start_value, NonnullRefPtr<CalculationNode const> end_value);
+    ~ProgressCalculationNode();
+
+    virtual bool contains_percentage() const override;
+    virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
+    virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
+
+    virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return { { m_value, m_start_value, m_end_value } }; }
+
+    virtual void dump(StringBuilder&, int indent) const override;
+    virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
+
+    bool no_clamp() const { return m_no_clamp; }
+
+private:
+    ProgressCalculationNode(bool no_clamp, NonnullRefPtr<CalculationNode const> value, NonnullRefPtr<CalculationNode const> start_value, NonnullRefPtr<CalculationNode const> end_value, Optional<NumericType> numeric_type);
+
+    bool m_no_clamp;
+    NonnullRefPtr<CalculationNode const> m_value;
+    NonnullRefPtr<CalculationNode const> m_start_value;
+    NonnullRefPtr<CalculationNode const> m_end_value;
 };
 
 class NegateCalculationNode final : public CalculationNode {
@@ -346,6 +376,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -366,6 +397,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -386,6 +418,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -406,6 +439,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -426,6 +460,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
     virtual GC::Ptr<CSSNumericValue> reify(JS::Realm&) const override;
 
 private:
@@ -448,6 +483,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit AbsCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -467,6 +503,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit SignCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -486,6 +523,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit SinCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -505,6 +543,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit CosCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -524,6 +563,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit TanCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -543,6 +583,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit AsinCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -562,6 +603,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit AcosCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -581,6 +623,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit AtanCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -600,6 +643,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     Atan2CalculationNode(NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>);
@@ -620,6 +664,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     PowCalculationNode(NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>);
@@ -640,6 +685,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit SqrtCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -663,6 +709,7 @@ public:
 private:
     HypotCalculationNode(Vector<NonnullRefPtr<CalculationNode const>>, Optional<NumericType>);
     Vector<NonnullRefPtr<CalculationNode const>> m_values;
+    virtual bool is_computationally_independent() const override;
 };
 
 class LogCalculationNode final : public CalculationNode {
@@ -678,6 +725,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     LogCalculationNode(NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>);
@@ -698,6 +746,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     explicit ExpCalculationNode(NonnullRefPtr<CalculationNode const>);
@@ -719,6 +768,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     RoundCalculationNode(RoundingStrategy, NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>, Optional<NumericType>);
@@ -740,11 +790,39 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     ModCalculationNode(NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>, Optional<NumericType>);
     NonnullRefPtr<CalculationNode const> m_x;
     NonnullRefPtr<CalculationNode const> m_y;
+};
+
+class RandomCalculationNode final : public CalculationNode {
+public:
+    static NonnullRefPtr<RandomCalculationNode const> create(NonnullRefPtr<RandomValueSharingStyleValue const>, NonnullRefPtr<CalculationNode const> minimum, NonnullRefPtr<CalculationNode const> maximum, RefPtr<CalculationNode const> step);
+    ~RandomCalculationNode();
+
+    virtual bool contains_percentage() const override;
+    virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
+    virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
+
+    // NOTE: We don't return children here as serialization is handled ad-hoc
+    virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return {}; }
+
+    void serialize(StringBuilder&, CalculationContext const&, SerializationMode) const;
+    String to_string(CalculationContext const&, SerializationMode serialization_mode) const;
+
+    virtual void dump(StringBuilder&, int indent) const override;
+    virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
+
+private:
+    RandomCalculationNode(NonnullRefPtr<RandomValueSharingStyleValue const>, NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>, RefPtr<CalculationNode const>, Optional<NumericType>);
+    ValueComparingNonnullRefPtr<RandomValueSharingStyleValue const> m_random_value_sharing;
+    ValueComparingNonnullRefPtr<CalculationNode const> m_minimum;
+    ValueComparingNonnullRefPtr<CalculationNode const> m_maximum;
+    ValueComparingRefPtr<CalculationNode const> m_step;
 };
 
 class RemCalculationNode final : public CalculationNode {
@@ -760,6 +838,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
 private:
     RemCalculationNode(NonnullRefPtr<CalculationNode const>, NonnullRefPtr<CalculationNode const>, Optional<NumericType>);
@@ -778,6 +857,7 @@ public:
 
     virtual void dump(StringBuilder&, int indent) const override;
     virtual bool equals(CalculationNode const&) const override;
+    virtual bool is_computationally_independent() const override;
 
     ValueComparingNonnullRefPtr<AbstractNonMathCalcFunctionStyleValue const> function() const { return m_function; }
 
@@ -785,6 +865,12 @@ private:
     NonMathFunctionCalculationNode(AbstractNonMathCalcFunctionStyleValue const& function, NumericType);
     ValueComparingNonnullRefPtr<AbstractNonMathCalcFunctionStyleValue const> m_function;
 };
+
+#define ENUMERATE_TYPE(name) \
+    template<>               \
+    inline bool CalculationNode::fast_is<name##CalculationNode>() const { return type() == Type::name; }
+ENUMERATE_CALCULATION_NODE_TYPES(ENUMERATE_TYPE)
+#undef ENUMERATE_TYPE
 
 // https://drafts.csswg.org/css-values-4/#calc-simplification
 NonnullRefPtr<CalculationNode const> simplify_a_calculation_tree(CalculationNode const& root, CalculationContext const& context, CalculationResolutionContext const& resolution_context);

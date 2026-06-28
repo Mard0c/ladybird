@@ -49,7 +49,7 @@ Optional<Utf16String> TrustedTypePolicyFactory::get_attribute_type(Utf16String c
         attr_ns.clear();
 
     // 5. Let interface be the element interface for localName and elementNs.
-    Utf16String const interface = element_interface_name(local_name, element_ns.value());
+    auto const interface = element_interface(local_name, element_ns.value().to_utf8());
 
     // 6. Let expectedType be null.
     Optional<Utf16String> expected_type {};
@@ -98,7 +98,7 @@ Optional<Utf16String> TrustedTypePolicyFactory::get_property_type(Utf16String co
         TrustedTypeName trusted_type;
     };
 
-    static Vector<TrustedTypesPropertyTypeData> const table {
+    static auto const& table = *new Vector<TrustedTypesPropertyTypeData> {
         { "HTMLIFrameElement"_utf16, "srcdoc"_utf16, TrustedTypeName::TrustedHTML },
         { "HTMLScriptElement"_utf16, "innerText"_utf16, TrustedTypeName::TrustedScript },
         { "HTMLScriptElement"_utf16, "src"_utf16, TrustedTypeName::TrustedScriptURL },
@@ -142,7 +142,7 @@ void TrustedTypePolicyFactory::visit_edges(Visitor& visitor)
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-createpolicy
-WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_policy(Utf16String const& policy_name, TrustedTypePolicyOptions const& policy_options)
+WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_policy(Utf16String const& policy_name, Bindings::TrustedTypePolicyOptions const& policy_options)
 {
     // 1. Returns the result of executing a Create a Trusted Type Policy algorithm, with the following arguments:
     //      factory: this value
@@ -156,21 +156,21 @@ WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create
 bool TrustedTypePolicyFactory::is_html(JS::Value value)
 {
     // 1. Returns true if value is an instance of TrustedHTML and has an associated data value set, false otherwise.
-    return value.is_object() && is<TrustedHTML>(value.as_object());
+    return value.is<TrustedHTML>();
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-isscript
 bool TrustedTypePolicyFactory::is_script(JS::Value value)
 {
     // 1. Returns true if value is an instance of TrustedScript and has an associated data value set, false otherwise.
-    return value.is_object() && is<TrustedScript>(value.as_object());
+    return value.is<TrustedScript>();
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-isscripturl
 bool TrustedTypePolicyFactory::is_script_url(JS::Value value)
 {
     // 1. Returns true if value is an instance of TrustedScriptURL and has an associated data value set, false otherwise.
-    return value.is_object() && is<TrustedScriptURL>(value.as_object());
+    return value.is<TrustedScriptURL>();
 }
 
 GC::Ref<TrustedHTML const> TrustedTypePolicyFactory::empty_html()
@@ -194,7 +194,7 @@ GC::Ref<TrustedScript const> TrustedTypePolicyFactory::empty_script()
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#create-trusted-type-policy-algorithm
-WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_a_trusted_type_policy(Utf16String const& policy_name, TrustedTypePolicyOptions const& options, JS::Object& global)
+WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_a_trusted_type_policy(Utf16String const& policy_name, Bindings::TrustedTypePolicyOptions const& options, JS::Object& global)
 {
     auto& realm = this->realm();
 
@@ -296,14 +296,17 @@ ContentSecurityPolicy::Directives::Directive::Result TrustedTypePolicyFactory::s
     return result;
 }
 
-// https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-get-trusted-type-data-for-attribute
-Optional<TrustedTypeData> get_trusted_type_data_for_attribute(Utf16String const& element, Utf16String const& attribute, Optional<Utf16String> const& attribute_ns)
+// https://w3c.github.io/trusted-types/dist/spec/#get-trusted-type-data-for-attribute
+Optional<TrustedTypeData> get_trusted_type_data_for_attribute(ElementInterface const& element, Utf16String const& attribute, Optional<Utf16String> const& attribute_ns)
 {
     // 1. Let data be null.
     Optional<TrustedTypeData const&> data {};
 
-    // 2. If attributeNs is null, and attribute is the name of an event handler content attribute, then:
-    if (!attribute_ns.has_value()) {
+    auto const& [element_name, element_ns] = element;
+
+    // 2. If attributeNs is null, « HTML namespace, SVG namespace, MathML namespace » contains element’s namespace, and attribute is the name of an event handler content attribute:
+    if (!attribute_ns.has_value()
+        && (Namespace::HTML == element_ns || Namespace::SVG == element_ns || Namespace::MathML == element_ns)) {
 #undef __ENUMERATE
 #define __ENUMERATE(attribute_name, event_name)                                                                                                       \
     if (attribute == HTML::AttributeNames::attribute_name) {                                                                                          \
@@ -315,7 +318,7 @@ Optional<TrustedTypeData> get_trusted_type_data_for_attribute(Utf16String const&
 #undef __ENUMERATE
     }
 
-    static Vector<TrustedTypeData> const table {
+    static auto const& table = *new Vector<TrustedTypeData> {
         { "HTMLIFrameElement"_utf16, {}, HTML::AttributeNames::srcdoc, TrustedTypeName::TrustedHTML, InjectionSink::HTMLIFrameElement_srcdoc },
         { "HTMLScriptElement"_utf16, {}, HTML::AttributeNames::src, TrustedTypeName::TrustedScriptURL, InjectionSink::HTMLScriptElement_src },
         { "SVGScriptElement"_utf16, {}, HTML::AttributeNames::href, TrustedTypeName::TrustedScriptURL, InjectionSink::SVGScriptElement_href },
@@ -324,8 +327,8 @@ Optional<TrustedTypeData> get_trusted_type_data_for_attribute(Utf16String const&
 
     // 3. Find the row in the following table, where element is in the first column, attributeNs is in the second column,
     // and attribute is in the third column. If a matching row is found, set data to that row.
-    data = table.first_matching([&element, &attribute, &attribute_ns](auto const& row) {
-        return row.element == element && row.attribute_ns == attribute_ns && row.attribute_local_name == attribute;
+    data = table.first_matching([&element_name, &attribute, &attribute_ns](auto const& row) {
+        return row.element == element_name && row.attribute_ns == attribute_ns && row.attribute_local_name == attribute;
     });
 
     // 4. Return data

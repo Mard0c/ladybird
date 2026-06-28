@@ -5,7 +5,8 @@
  */
 
 #include "CSSUnparsedValue.h"
-#include <LibWeb/Bindings/CSSUnparsedValuePrototype.h>
+#include <AK/Utf16StringBuilder.h>
+#include <LibWeb/Bindings/CSSUnparsedValue.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSVariableReferenceValue.h>
 #include <LibWeb/CSS/Parser/Parser.h>
@@ -16,28 +17,28 @@ namespace Web::CSS {
 
 GC_DEFINE_ALLOCATOR(CSSUnparsedValue);
 
-GC::Ref<CSSUnparsedValue> CSSUnparsedValue::create(JS::Realm& realm, Vector<GCRootCSSUnparsedSegment> value)
+GC::Ref<CSSUnparsedValue> CSSUnparsedValue::create(JS::Realm& realm, ReadonlySpan<CSSUnparsedSegment> value)
 {
-    // NB: Convert our GC::Roots into GC::Refs.
+    // NB: Convert our Span into a Vector of Refs.
     Vector<CSSUnparsedSegment> converted_value;
     for (auto const& variant : value) {
         variant.visit(
-            [&](GC::Root<CSSVariableReferenceValue> const& it) { converted_value.append(GC::Ref { *it }); },
-            [&](String const& it) { converted_value.append(it); });
+            [&](GC::Ref<CSSVariableReferenceValue> it) { converted_value.append(it); },
+            [&](Utf16String const& it) { converted_value.append(it); });
     }
 
     return realm.create<CSSUnparsedValue>(realm, move(converted_value));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#dom-cssunparsedvalue-cssunparsedvalue
-WebIDL::ExceptionOr<GC::Ref<CSSUnparsedValue>> CSSUnparsedValue::construct_impl(JS::Realm& realm, Vector<GCRootCSSUnparsedSegment> value)
+WebIDL::ExceptionOr<GC::Ref<CSSUnparsedValue>> CSSUnparsedValue::construct_impl(JS::Realm& realm, ReadonlySpan<CSSUnparsedSegment> value)
 {
     // AD-HOC: There is no spec for this, see https://github.com/w3c/css-houdini-drafts/issues/1146
 
     return CSSUnparsedValue::create(realm, move(value));
 }
 
-CSSUnparsedValue::CSSUnparsedValue(JS::Realm& realm, Vector<CSSUnparsedSegment> value)
+CSSUnparsedValue::CSSUnparsedValue(JS::Realm& realm, ReadonlySpan<CSSUnparsedSegment> value)
     : CSSStyleValue(realm)
     , m_tokens(move(value))
 {
@@ -82,17 +83,14 @@ Optional<JS::Value> CSSUnparsedValue::item_value(size_t index) const
     auto value = m_tokens[index];
     return value.visit(
         [&](GC::Ref<CSSVariableReferenceValue> const& variable) -> JS::Value { return variable; },
-        [&](String const& string) -> JS::Value { return JS::PrimitiveString::create(vm(), string); });
+        [&](Utf16String const& string) -> JS::Value { return JS::PrimitiveString::create(vm(), string); });
 }
 
 static WebIDL::ExceptionOr<CSSUnparsedSegment> unparsed_segment_from_js_value(JS::VM& vm, JS::Value& value)
 {
-    if (value.is_object()) {
-        if (auto* variable_reference = as_if<CSSVariableReferenceValue>(value.as_object())) {
-            return GC::Ref { *variable_reference };
-        }
-    }
-    return TRY(value.to_string(vm));
+    if (auto variable_reference = value.as_if<CSSVariableReferenceValue>())
+        return GC::Ref { *variable_reference };
+    return TRY(value.to_utf16_string(vm));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#ref-for-dfn-set-the-value-of-an-existing-indexed-property
@@ -134,17 +132,17 @@ bool CSSUnparsedValue::contains_unparsed_value(CSSUnparsedValue const& needle) c
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#serialize-a-cssunparsedvalue
-WebIDL::ExceptionOr<String> CSSUnparsedValue::to_string() const
+WebIDL::ExceptionOr<Utf16String> CSSUnparsedValue::to_string() const
 {
     // AD-HOC: It's possible for one of the m_tokens to contain this in its fallback slot, or a similar situation with
     //         more levels of nesting. To avoid crashing, do a scan for that first and return the empty string.
     // Spec issue: https://github.com/w3c/css-houdini-drafts/issues/1158
     if (contains_unparsed_value(*this))
-        return ""_string;
+        return Utf16String::from_utf8_without_validation(""sv);
 
     // To serialize a CSSUnparsedValue this:
     // 1. Let s initially be the empty string.
-    StringBuilder s;
+    Utf16StringBuilder s;
 
     // 2. For each item in this’s [[tokens]] internal slot:
     for (auto const& item : m_tokens) {
@@ -152,7 +150,7 @@ WebIDL::ExceptionOr<String> CSSUnparsedValue::to_string() const
         //        serialize_a_series_of_component_values(). See https://github.com/w3c/css-houdini-drafts/issues/1148
         TRY(item.visit(
             // 1. If item is a USVString, append it to s.
-            [&](String const& string) -> WebIDL::ExceptionOr<void> {
+            [&](Utf16String const& string) -> WebIDL::ExceptionOr<void> {
                 s.append(string);
                 return {};
             },
@@ -164,7 +162,7 @@ WebIDL::ExceptionOr<String> CSSUnparsedValue::to_string() const
     }
 
     // 3. Return s.
-    return s.to_string_without_validation();
+    return s.to_string();
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#create-an-internal-representation
@@ -184,10 +182,17 @@ WebIDL::ExceptionOr<NonnullRefPtr<StyleValue const>> CSSUnparsedValue::create_an
 
     // NB: CSSUnparsedValue stores a list of strings, each of which may contain any number of tokens. So the simplest
     //     way to convert it to ComponentValues is to serialize and then parse it.
-    auto string = TRY(to_string());
+    auto utf16_string = TRY(to_string());
+    auto string = MUST(utf16_string.utf16_view().to_utf8());
     auto parser = Parser::Parser::create(Parser::ParsingParams {}, string);
     auto component_values = parser.parse_as_list_of_component_values();
-    return UnresolvedStyleValue::create(move(component_values));
+
+    Parser::SubstitutionFunctionsPresence substitution_presence;
+
+    if (Parser::Parser::collect_arbitrary_substitution_function_presence(component_values, substitution_presence).is_error())
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Invalid arbitrary substitution function syntax"_string };
+
+    return UnresolvedStyleValue::create(move(component_values), substitution_presence, {}, UnresolvedStyleValue::SourceTextMode::Preserve);
 }
 
 }

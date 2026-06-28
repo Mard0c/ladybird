@@ -7,9 +7,11 @@
 
 #pragma once
 
+#include <LibWeb/Animations/Animatable.h>
 #include <LibWeb/Animations/Animation.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Utils.h>
+#include <LibWeb/HTML/HTMLElement.h>
 
 namespace Web::DOM {
 
@@ -22,6 +24,13 @@ GC::Ptr<Element> calculate_active_element(T& self)
 {
     // 1. Let candidate be this's node document's focused area's DOM anchor.
     Node* candidate = self.document().focused_area();
+
+    // AD-HOC: null focused_area indicates "viewport focus".
+    // https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
+    // If the focusable area is the viewport of a Document that has a non-null browsing context and is not inert then
+    // the DOM anchor is the document for which the viewport was created.
+    if (!candidate && self.document().browsing_context() && !self.document().is_inert())
+        candidate = &self.document();
 
     // 2. Set candidate to the result of retargeting candidate against this.
     candidate = as<Node>(retarget(candidate, &self));
@@ -56,7 +65,9 @@ WebIDL::ExceptionOr<Vector<GC::Ref<Animations::Animation>>> calculate_get_animat
     // method is called.
     Vector<GC::Ref<Animations::Animation>> relevant_animations;
     TRY(self.template for_each_child_of_type_fallible<Element>([&](auto& child) -> WebIDL::ExceptionOr<IterationDecision> {
-        relevant_animations.extend(TRY(child.get_animations(Animations::GetAnimationsOptions { .subtree = true })));
+        relevant_animations.extend(TRY(child.get_animations_internal(
+            Animations::Animatable::GetAnimationsSorted::No,
+            Bindings::GetAnimationsOptions { .subtree = true })));
         return IterationDecision::Continue;
     }));
 

@@ -7,7 +7,6 @@
 #pragma once
 
 #include <AK/String.h>
-#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/HTML/Canvas/CanvasState.h>
 #include <LibWeb/HTML/CanvasGradient.h>
 #include <LibWeb/HTML/CanvasPattern.h>
@@ -15,7 +14,6 @@
 namespace Web::HTML {
 
 // https://html.spec.whatwg.org/multipage/canvas.html#canvasshadowstyles
-template<typename IncludingClass>
 class CanvasShadowStyles {
 public:
     ~CanvasShadowStyles() = default;
@@ -34,10 +32,6 @@ public:
 
 protected:
     CanvasShadowStyles() = default;
-
-private:
-    CanvasState::DrawingState& my_drawing_state() { return reinterpret_cast<IncludingClass&>(*this).drawing_state(); }
-    CanvasState::DrawingState const& my_drawing_state() const { return reinterpret_cast<IncludingClass const&>(*this).drawing_state(); }
 };
 
 }

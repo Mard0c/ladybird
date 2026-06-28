@@ -9,13 +9,13 @@
  */
 
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
+#include <LibWeb/Bindings/Transformer.h>
 #include <LibWeb/Streams/ReadableStream.h>
 #include <LibWeb/Streams/ReadableStreamDefaultController.h>
 #include <LibWeb/Streams/ReadableStreamOperations.h>
 #include <LibWeb/Streams/TransformStream.h>
 #include <LibWeb/Streams/TransformStreamDefaultController.h>
 #include <LibWeb/Streams/TransformStreamOperations.h>
-#include <LibWeb/Streams/Transformer.h>
 #include <LibWeb/Streams/WritableStream.h>
 #include <LibWeb/Streams/WritableStreamDefaultController.h>
 #include <LibWeb/Streams/WritableStreamOperations.h>
@@ -161,7 +161,7 @@ void set_up_transform_stream_default_controller(TransformStream& stream, Transfo
 }
 
 // https://streams.spec.whatwg.org/#set-up-transform-stream-default-controller-from-transformer
-void set_up_transform_stream_default_controller_from_transformer(TransformStream& stream, JS::Value transformer, Transformer& transformer_dict)
+void set_up_transform_stream_default_controller_from_transformer(TransformStream& stream, JS::Value transformer, Bindings::Transformer& transformer_dict)
 {
     auto& realm = stream.realm();
     auto& vm = realm.vm();
@@ -322,7 +322,7 @@ void transform_stream_default_controller_terminate(TransformStreamDefaultControl
     readable_stream_default_controller_close(readable_controller);
 
     // 4. Let error be a TypeError exception indicating that the stream has been terminated.
-    auto error = JS::TypeError::create(realm, "Stream has been terminated."sv);
+    auto error = JS::TypeError::create(realm, "Stream has been terminated."_utf16);
 
     // 5. Perform ! TransformStreamErrorWritableAndUnblockWrite(stream, error).
     transform_stream_error_writable_and_unblock_write(*stream, error);

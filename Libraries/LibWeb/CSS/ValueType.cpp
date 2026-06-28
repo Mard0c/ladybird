@@ -25,6 +25,8 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::Color;
     if (string.equals_ignoring_ascii_case("counter"sv))
         return ValueType::Counter;
+    if (string.equals_ignoring_ascii_case("counter-style"sv))
+        return ValueType::CounterStyle;
     if (string.equals_ignoring_ascii_case("custom-ident"sv))
         return ValueType::CustomIdent;
     if (string.equals_ignoring_ascii_case("dashed-ident"sv))
@@ -37,6 +39,14 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::FitContent;
     if (string.equals_ignoring_ascii_case("flex"sv))
         return ValueType::Flex;
+    if (string.equals_ignoring_ascii_case("font-variant-alternates"sv))
+        return ValueType::FontVariantAlternates;
+    if (string.equals_ignoring_ascii_case("font-variant-east-asian"sv))
+        return ValueType::FontVariantEastAsian;
+    if (string.equals_ignoring_ascii_case("font-variant-ligatures"sv))
+        return ValueType::FontVariantLigatures;
+    if (string.equals_ignoring_ascii_case("font-variant-numeric"sv))
+        return ValueType::FontVariantNumeric;
     if (string.equals_ignoring_ascii_case("frequency"sv))
         return ValueType::Frequency;
     if (string.equals_ignoring_ascii_case("frequency-percentage"sv))
@@ -51,8 +61,8 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::LengthPercentage;
     if (string.equals_ignoring_ascii_case("number"sv))
         return ValueType::Number;
-    if (string.equals_ignoring_ascii_case("opacity"sv))
-        return ValueType::Opacity;
+    if (string.equals_ignoring_ascii_case("opacity-value"sv))
+        return ValueType::OpacityValue;
     if (string.equals_ignoring_ascii_case("opentype-tag"sv))
         return ValueType::OpentypeTag;
     if (string.equals_ignoring_ascii_case("paint"sv))
@@ -67,6 +77,8 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::Rect;
     if (string.equals_ignoring_ascii_case("resolution"sv))
         return ValueType::Resolution;
+    if (string.equals_ignoring_ascii_case("scroll-function"sv))
+        return ValueType::ScrollFunction;
     if (string.equals_ignoring_ascii_case("string"sv))
         return ValueType::String;
     if (string.equals_ignoring_ascii_case("time"sv))
@@ -79,6 +91,10 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::TransformList;
     if (string.equals_ignoring_ascii_case("url"sv))
         return ValueType::Url;
+    if (string.equals_ignoring_ascii_case("view-function"sv))
+        return ValueType::ViewFunction;
+    if (string.equals_ignoring_ascii_case("view-timeline-inset"sv))
+        return ValueType::ViewTimelineInset;
     return {};
 }
 
@@ -103,6 +119,8 @@ StringView value_type_to_string(ValueType value_type)
         return "CornerShape"sv;
     case Web::CSS::ValueType::Counter:
         return "Counter"sv;
+    case Web::CSS::ValueType::CounterStyle:
+        return "CounterStyle"sv;
     case Web::CSS::ValueType::CustomIdent:
         return "CustomIdent"sv;
     case Web::CSS::ValueType::DashedIdent:
@@ -115,6 +133,16 @@ StringView value_type_to_string(ValueType value_type)
         return "FitContent"sv;
     case Web::CSS::ValueType::Flex:
         return "Flex"sv;
+    case Web::CSS::ValueType::FontStyle:
+        return "FontStyle"sv;
+    case Web::CSS::ValueType::FontVariantAlternates:
+        return "FontVariantAlternates"sv;
+    case Web::CSS::ValueType::FontVariantEastAsian:
+        return "FontVariantEastAsian"sv;
+    case Web::CSS::ValueType::FontVariantLigatures:
+        return "FontVariantLigatures"sv;
+    case Web::CSS::ValueType::FontVariantNumeric:
+        return "FontVariantNumeric"sv;
     case Web::CSS::ValueType::Frequency:
         return "Frequency"sv;
     case Web::CSS::ValueType::FrequencyPercentage:
@@ -129,8 +157,8 @@ StringView value_type_to_string(ValueType value_type)
         return "LengthPercentage"sv;
     case Web::CSS::ValueType::Number:
         return "Number"sv;
-    case Web::CSS::ValueType::Opacity:
-        return "Opacity"sv;
+    case Web::CSS::ValueType::OpacityValue:
+        return "OpacityValue"sv;
     case Web::CSS::ValueType::OpentypeTag:
         return "OpenTypeTag"sv;
     case Web::CSS::ValueType::Paint:
@@ -145,6 +173,8 @@ StringView value_type_to_string(ValueType value_type)
         return "Rect"sv;
     case Web::CSS::ValueType::Resolution:
         return "Resolution"sv;
+    case Web::CSS::ValueType::ScrollFunction:
+        return "ScrollFunction"sv;
     case Web::CSS::ValueType::String:
         return "String"sv;
     case Web::CSS::ValueType::Time:
@@ -157,6 +187,10 @@ StringView value_type_to_string(ValueType value_type)
         return "TransformList"sv;
     case Web::CSS::ValueType::Url:
         return "Url"sv;
+    case Web::CSS::ValueType::ViewFunction:
+        return "ViewFunction"sv;
+    case Web::CSS::ValueType::ViewTimelineInset:
+        return "ViewTimelineInset"sv;
     }
 
     VERIFY_NOT_REACHED();

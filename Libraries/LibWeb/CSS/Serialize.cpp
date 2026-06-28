@@ -10,6 +10,7 @@
 #include <LibWeb/CSS/Parser/ComponentValue.h>
 #include <LibWeb/CSS/Parser/TokenStream.h>
 #include <LibWeb/CSS/Serialize.h>
+#include <LibWeb/CSS/StyleValues/StyleValue.h>
 #include <LibWeb/Infra/Strings.h>
 
 namespace Web::CSS {
@@ -78,6 +79,10 @@ void serialize_an_identifier(StringBuilder& builder, StringView ident)
         escape_a_character(builder, character);
     }
 }
+void serialize_an_identifier(StringBuilder& builder, Utf16View ident)
+{
+    serialize_an_identifier(builder, ident.to_utf8_but_should_be_ported_to_utf16());
+}
 
 // https://www.w3.org/TR/cssom-1/#serialize-a-string
 void serialize_a_string(StringBuilder& builder, StringView string)
@@ -133,9 +138,36 @@ void serialize_unicode_ranges(StringBuilder& builder, Vector<Gfx::UnicodeRange> 
 void serialize_a_number(StringBuilder& builder, double value)
 {
     // -> <number>
-    // A base-ten number using digits 0-9 (U+0030 to U+0039) in the shortest form possible, using "." to separate
-    // decimals (if any), rounding the value if necessary to not produce more than 6 decimals, preceded by "-" (U+002D)
-    // if it is negative.
+    //    A base-ten number using digits 0-9 (U+0030 to U+0039) in the shortest form possible, using "." to separate
+    //    decimals (if any), rounding the value if necessary to not produce more than 6 decimals, preceded by "-"
+    //    (U+002D) if it is negative.
+    // NOTE: scientific notation is not used.
+
+    // AD-HOC: If the number is small enough that it would not print any digits when rounded, serialize it as 0.
+    if (AK::abs(value) < 0.0000005) {
+        builder.append("0"sv);
+        return;
+    }
+
+    // FIXME: Prevent scientific notation for large values.
+    builder.appendff("{:.6}", value);
+}
+
+void serialize_a_number(Utf16StringBuilder& builder, double value)
+{
+    // -> <number>
+    //    A base-ten number using digits 0-9 (U+0030 to U+0039) in the shortest form possible, using "." to separate
+    //    decimals (if any), rounding the value if necessary to not produce more than 6 decimals, preceded by "-"
+    //    (U+002D) if it is negative.
+    // NOTE: scientific notation is not used.
+
+    // AD-HOC: If the number is small enough that it would not print any digits when rounded, serialize it as 0.
+    if (AK::abs(value) < 0.0000005) {
+        builder.append_ascii('0');
+        return;
+    }
+
+    // FIXME: Prevent scientific notation for large values.
     builder.appendff("{:.6}", value);
 }
 
@@ -168,7 +200,7 @@ String serialize_a_number(double value)
 }
 
 // https://drafts.csswg.org/cssom/#serialize-a-css-declaration
-String serialize_a_css_declaration(StringView property, StringView value, Important important)
+String serialize_a_css_declaration(Utf16View property, StringView value, Important important)
 {
     // 1. Let s be the empty string.
     StringBuilder builder;
@@ -236,10 +268,10 @@ static bool needs_comment_between(Parser::ComponentValue const& first, Parser::C
             return true;
         if (!second.is_token())
             return false;
-        if (second.token().type() == Parser::Token::Type::Delim)
-            return second.is_delim('-') || second.is_delim('(');
+        if (second.is_delim('-'))
+            return true;
         return first_is_one_of(second.token().type(),
-            Parser::Token::Type::Ident, Parser::Token::Type::Url, Parser::Token::Type::BadUrl, Parser::Token::Type::Number, Parser::Token::Type::Percentage, Parser::Token::Type::Dimension, Parser::Token::Type::CDC);
+            Parser::Token::Type::Ident, Parser::Token::Type::Url, Parser::Token::Type::BadUrl, Parser::Token::Type::Number, Parser::Token::Type::Percentage, Parser::Token::Type::Dimension, Parser::Token::Type::CDC, Parser::Token::Type::OpenParen);
     }
 
     if (first.is(Parser::Token::Type::AtKeyword)
@@ -305,6 +337,70 @@ String serialize_a_series_of_component_values(ReadonlySpan<Parser::ComponentValu
     }
 
     return builder.to_string_without_validation();
+}
+
+static bool should_preserve_original_source_text_for_custom_property(Parser::ComponentValue const& component_value)
+{
+    return component_value.is(Parser::Token::Type::Number)
+        || component_value.is(Parser::Token::Type::Percentage)
+        || component_value.is(Parser::Token::Type::Dimension);
+}
+
+String serialize_a_series_of_component_values_preserving_original_source_text(ReadonlySpan<Parser::ComponentValue> component_values)
+{
+    Parser::TokenStream tokens { component_values };
+    StringBuilder builder;
+
+    while (tokens.has_next_token()) {
+        auto const& current_token = tokens.consume_a_token();
+        auto const& next_token = tokens.next_token();
+        if (should_preserve_original_source_text_for_custom_property(current_token)) {
+            auto original_source_text = current_token.original_source_text();
+            if (original_source_text.is_empty())
+                return serialize_a_series_of_component_values(component_values);
+            builder.append(original_source_text);
+        } else {
+            builder.append(current_token.to_string());
+        }
+        if (needs_comment_between(current_token, next_token))
+            builder.append("/**/"sv);
+    }
+
+    return builder.to_string_without_validation();
+}
+
+String serialize_a_positional_value_list(StyleValueVector const& values, SerializationMode mode)
+{
+    switch (values.size()) {
+    case 2: {
+        auto first_property_serialized = values[0]->to_string(mode);
+        auto second_property_serialized = values[1]->to_string(mode);
+
+        if (first_property_serialized == second_property_serialized)
+            return first_property_serialized;
+
+        return MUST(String::formatted("{} {}", first_property_serialized, second_property_serialized));
+    }
+    case 4: {
+        auto first_property_serialized = values[0]->to_string(mode);
+        auto second_property_serialized = values[1]->to_string(mode);
+        auto third_property_serialized = values[2]->to_string(mode);
+        auto fourth_property_serialized = values[3]->to_string(mode);
+
+        if (first_is_equal_to_all_of(first_property_serialized, second_property_serialized, third_property_serialized, fourth_property_serialized))
+            return first_property_serialized;
+
+        if (first_property_serialized == third_property_serialized && second_property_serialized == fourth_property_serialized)
+            return MUST(String::formatted("{} {}", first_property_serialized, second_property_serialized));
+
+        if (second_property_serialized == fourth_property_serialized)
+            return MUST(String::formatted("{} {} {}", first_property_serialized, second_property_serialized, third_property_serialized));
+
+        return MUST(String::formatted("{} {} {} {}", first_property_serialized, second_property_serialized, third_property_serialized, fourth_property_serialized));
+    }
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 }

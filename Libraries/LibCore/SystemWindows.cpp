@@ -6,18 +6,22 @@
  * Copyright (c) 2023, Cameron Youell <cameronyouell@gmail.com>
  * Copyright (c) 2024-2025, stasoid <stasoid@yahoo.com>
  * Copyright (c) 2025, ayeteadoe <ayeteadoe@gmail.com>
+ * Copyright (c) 2026, Gregory Bertilson <gregory@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
 #include <AK/ByteString.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/Process.h>
+#include <LibCore/SocketAddress.h>
 #include <LibCore/System.h>
 #include <direct.h>
 #include <sys/mman.h>
 
 #include <AK/Windows.h>
+#include <ws2tcpip.h>
 
 namespace Core::System {
 
@@ -45,7 +49,7 @@ ErrorOr<void> close(int handle)
     return {};
 }
 
-ErrorOr<ssize_t> read(int handle, Bytes buffer)
+ErrorOr<size_t> read(int handle, Bytes buffer)
 {
     DWORD n_read = 0;
     if (!ReadFile(to_handle(handle), buffer.data(), buffer.size(), &n_read, NULL))
@@ -53,7 +57,7 @@ ErrorOr<ssize_t> read(int handle, Bytes buffer)
     return n_read;
 }
 
-ErrorOr<ssize_t> write(int handle, ReadonlyBytes buffer)
+ErrorOr<size_t> write(int handle, ReadonlyBytes buffer)
 {
     DWORD n_written = 0;
     if (!WriteFile(to_handle(handle), buffer.data(), buffer.size(), &n_written, NULL))
@@ -96,9 +100,9 @@ ErrorOr<void> ioctl(int fd, unsigned request, ...)
 {
     va_list ap;
     va_start(ap, request);
-    u_long arg = va_arg(ap, FlatPtr);
+    u_long* arg = va_arg(ap, u_long*);
     va_end(ap);
-    if (::ioctlsocket(fd, request, &arg) == SOCKET_ERROR)
+    if (::ioctlsocket(fd, request, arg) == SOCKET_ERROR)
         return Error::from_windows_error();
     return {};
 }
@@ -116,9 +120,6 @@ ErrorOr<ByteString> getcwd()
 
 ErrorOr<void> chdir(StringView path)
 {
-    if (path.is_null())
-        return Error::from_errno(EFAULT);
-
     ByteString path_string = path;
     if (::_chdir(path_string.characters()) < 0)
         return Error::from_syscall("chdir"sv, errno);
@@ -127,9 +128,6 @@ ErrorOr<void> chdir(StringView path)
 
 ErrorOr<struct stat> stat(StringView path)
 {
-    if (path.is_null())
-        return Error::from_syscall("stat"sv, EFAULT);
-
     struct stat st = {};
     ByteString path_string = path;
     if (::stat(path_string.characters(), &st) < 0)
@@ -139,9 +137,6 @@ ErrorOr<struct stat> stat(StringView path)
 
 ErrorOr<void> rmdir(StringView path)
 {
-    if (path.is_null())
-        return Error::from_errno(EFAULT);
-
     ByteString path_string = path;
     if (_rmdir(path_string.characters()) < 0)
         return Error::from_syscall("rmdir"sv, errno);
@@ -150,9 +145,6 @@ ErrorOr<void> rmdir(StringView path)
 
 ErrorOr<void> unlink(StringView path)
 {
-    if (path.is_null())
-        return Error::from_errno(EFAULT);
-
     ByteString path_string = path;
     if (_unlink(path_string.characters()) < 0)
         return Error::from_syscall("unlink"sv, errno);
@@ -164,6 +156,15 @@ ErrorOr<void> mkdir(StringView path, mode_t)
     ByteString str = path;
     if (_mkdir(str.characters()) < 0)
         return Error::from_syscall("mkdir"sv, errno);
+    return {};
+}
+
+ErrorOr<void> rename(StringView old_path, StringView new_path)
+{
+    ByteString old_path_string = old_path;
+    ByteString new_path_string = new_path;
+    if (!MoveFileExA(old_path_string.characters(), new_path_string.characters(), MOVEFILE_REPLACE_EXISTING))
+        return Error::from_windows_error();
     return {};
 }
 
@@ -198,6 +199,30 @@ ErrorOr<void> munmap(void* address, size_t size)
     return {};
 }
 
+ErrorOr<void*> reserve_address_space(size_t size)
+{
+    void* ptr = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!ptr)
+        return Error::from_windows_error();
+    return ptr;
+}
+
+ErrorOr<void> commit_memory(void* address, size_t size)
+{
+    if (!VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE))
+        return Error::from_windows_error();
+    return {};
+}
+
+ErrorOr<void> release_address_space(void* address, size_t size)
+{
+    // VirtualFree with MEM_RELEASE requires size == 0 and frees the entire reservation.
+    (void)size;
+    if (!VirtualFree(address, 0, MEM_RELEASE))
+        return Error::from_windows_error();
+    return {};
+}
+
 int getpid()
 {
     return GetCurrentProcessId();
@@ -209,10 +234,10 @@ ErrorOr<int> dup(int handle)
         return Error::from_windows_error(ERROR_INVALID_HANDLE);
     }
     if (is_socket(handle)) {
-        WSAPROTOCOL_INFO pi = {};
-        if (WSADuplicateSocket(handle, GetCurrentProcessId(), &pi))
+        WSAPROTOCOL_INFOW pi = {};
+        if (WSADuplicateSocketW(handle, GetCurrentProcessId(), &pi))
             return Error::from_windows_error();
-        SOCKET socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, &pi, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+        SOCKET socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, &pi, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
         if (socket == INVALID_SOCKET)
             return Error::from_windows_error();
         return socket;
@@ -252,17 +277,39 @@ ErrorOr<int> accept(int sockfd, struct sockaddr* addr, socklen_t* addr_size)
     return fd;
 }
 
-ErrorOr<ssize_t> sendto(int sockfd, void const* source, size_t source_length, int flags, struct sockaddr const* destination, socklen_t destination_length)
+ErrorOr<void> connect(int sockfd, struct sockaddr const* address, socklen_t address_length)
 {
-    auto sent = ::sendto(sockfd, static_cast<char const*>(source), source_length, flags, destination, destination_length);
+    if (::connect(sockfd, address, address_length) == SOCKET_ERROR)
+        return Error::from_windows_error();
+    return {};
+}
+
+ErrorOr<size_t> send(int sockfd, ReadonlyBytes data, int flags)
+{
+    auto sent = ::send(sockfd, reinterpret_cast<char const*>(data.data()), static_cast<int>(data.size()), flags);
+
+    if (sent == SOCKET_ERROR) {
+        auto error = WSAGetLastError();
+
+        return error == WSAEWOULDBLOCK
+            ? Error::from_errno(EWOULDBLOCK)
+            : Error::from_windows_error(error);
+    }
+
+    return sent;
+}
+
+ErrorOr<size_t> sendto(int sockfd, ReadonlyBytes data, int flags, struct sockaddr const* destination, socklen_t destination_length)
+{
+    auto sent = ::sendto(sockfd, reinterpret_cast<char const*>(data.data()), static_cast<int>(data.size()), flags, destination, destination_length);
     if (sent == SOCKET_ERROR)
         return Error::from_windows_error();
     return sent;
 }
 
-ErrorOr<ssize_t> recvfrom(int sockfd, void* buffer, size_t buffer_length, int flags, struct sockaddr* address, socklen_t* address_length)
+ErrorOr<size_t> recvfrom(int sockfd, Bytes buffer, int flags, struct sockaddr* address, socklen_t* address_length)
 {
-    auto received = ::recvfrom(sockfd, static_cast<char*>(buffer), buffer_length, flags, address, address_length);
+    auto received = ::recvfrom(sockfd, reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()), flags, address, address_length);
     if (received == SOCKET_ERROR)
         return Error::from_windows_error();
     return received;
@@ -330,6 +377,20 @@ ErrorOr<void> set_close_on_exec(int handle, bool enabled)
     return {};
 }
 
+ErrorOr<Array<int, 2>> pipe2(int flags)
+{
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = (flags & O_CLOEXEC) ? FALSE : TRUE;
+
+    HANDLE read_handle = nullptr;
+    HANDLE write_handle = nullptr;
+    if (!CreatePipe(&read_handle, &write_handle, &sa, 0))
+        return Error::from_windows_error();
+
+    return Array<int, 2> { to_fd(read_handle), to_fd(write_handle) };
+}
+
 ErrorOr<bool> isatty(int handle)
 {
     return GetFileType(to_handle(handle)) == FILE_TYPE_CHAR;
@@ -359,13 +420,6 @@ ErrorOr<AddressInfoVector> getaddrinfo(char const* nodename, char const* servnam
     return AddressInfoVector { move(addresses), results };
 }
 
-ErrorOr<void> connect(int socket, struct sockaddr const* address, socklen_t address_length)
-{
-    if (::connect(socket, address, address_length) == SOCKET_ERROR)
-        return Error::from_windows_error();
-    return {};
-}
-
 ErrorOr<void> kill(pid_t pid, int signal)
 {
     if (signal == SIGTERM) {
@@ -385,14 +439,27 @@ ErrorOr<void> kill(pid_t pid, int signal)
     return {};
 }
 
-ErrorOr<size_t> transfer_file_through_pipe(int source_fd, int target_fd, size_t source_offset, size_t source_length)
+ErrorOr<size_t> transfer_file_through_socket(int source_fd, int target_fd, size_t source_offset, size_t source_length)
 {
-    (void)source_fd;
-    (void)target_fd;
-    (void)source_offset;
-    (void)source_length;
+    // FIXME: We could use TransmitFile (https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-transmitfile)
+    //        here. But in order to transmit a subset of the file, we have to use overlapped IO.
 
-    return Error::from_string_literal("FIXME: Implement System::transfer_file_through_pipe on Windows (for HTTP disk cache)");
+    static auto allocation_granularity = []() {
+        SYSTEM_INFO system_info {};
+        GetSystemInfo(&system_info);
+
+        return system_info.dwAllocationGranularity;
+    }();
+
+    // MapViewOfFile requires the offset to be aligned to the system allocation granularity, so we must handle that here.
+    auto aligned_source_offset = (source_offset / allocation_granularity) * allocation_granularity;
+    auto offset_adjustment = source_offset - aligned_source_offset;
+    auto mapped_source_length = source_length + offset_adjustment;
+
+    auto* mapped = TRY(mmap(nullptr, mapped_source_length, PROT_READ, MAP_SHARED, source_fd, aligned_source_offset));
+    ScopeGuard guard { [&]() { (void)munmap(mapped, mapped_source_length); } };
+
+    return send(target_fd, { static_cast<u8*>(mapped) + offset_adjustment, source_length }, 0);
 }
 
 }

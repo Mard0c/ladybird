@@ -38,9 +38,15 @@ ByteLengthQueuingStrategy
 CDATASection
 CSSAnimation
 CSSConditionRule
+CSSContainerRule
 CSSCounterStyleRule
 CSSFontFaceDescriptors
 CSSFontFaceRule
+CSSFontFeatureValuesMap
+CSSFontFeatureValuesRule
+CSSFunctionDeclarations
+CSSFunctionDescriptors
+CSSFunctionRule
 CSSGroupingRule
 CSSImageValue
 CSSImportRule
@@ -72,6 +78,7 @@ CSSRotate
 CSSRule
 CSSRuleList
 CSSScale
+CSSScopeRule
 CSSSkew
 CSSSkewX
 CSSSkewY
@@ -88,10 +95,12 @@ CSSTranslate
 CSSUnitValue
 CSSUnparsedValue
 CSSVariableReferenceValue
+Cache
 CacheStorage
 CanvasGradient
 CanvasPattern
 CanvasRenderingContext2D
+CaretPosition
 ChannelMergerNode
 ChannelSplitterNode
 CharacterData
@@ -151,6 +160,7 @@ EvalError
 Event
 EventSource
 EventTarget
+External
 FederatedCredential
 File
 FileList
@@ -163,6 +173,7 @@ Float64Array
 FocusEvent
 FontFace
 FontFaceSet
+FontFaceSetLoadEvent
 FormData
 FormDataEvent
 Function
@@ -233,6 +244,7 @@ HTMLProgressElement
 HTMLQuoteElement
 HTMLScriptElement
 HTMLSelectElement
+HTMLSelectedContentElement
 HTMLSlotElement
 HTMLSourceElement
 HTMLSpanElement
@@ -281,11 +293,15 @@ Iterator
 KeyboardEvent
 KeyframeEffect
 Location
+Lock
+LockManager
 ManagedMediaSource
 ManagedSourceBuffer
 Map
 MathMLElement
 MediaCapabilities
+MediaDeviceInfo
+MediaDevices
 MediaElementAudioSourceNode
 MediaError
 MediaKeySystemAccess
@@ -294,6 +310,9 @@ MediaQueryList
 MediaQueryListEvent
 MediaSource
 MediaSourceHandle
+MediaStream
+MediaStreamTrack
+MediaStreamTrackEvent
 MessageChannel
 MessageEvent
 MessagePort
@@ -311,7 +330,6 @@ NavigationHistoryEntry
 NavigationTransition
 Navigator
 Node
-NodeFilter
 NodeIterator
 NodeList
 Notification
@@ -322,6 +340,7 @@ OfflineAudioContext
 OffscreenCanvas
 OffscreenCanvasRenderingContext2D
 Option
+Origin
 OscillatorNode
 PageTransitionEvent
 PannerNode
@@ -338,6 +357,8 @@ PerformanceObserverEntryList
 PerformanceResourceTiming
 PerformanceTiming
 PeriodicWave
+PermissionStatus
+Permissions
 Plugin
 PluginArray
 PointerEvent
@@ -346,6 +367,7 @@ ProcessingInstruction
 ProgressEvent
 Promise
 PromiseRejectionEvent
+QuotaExceededError
 RadioNodeList
 Range
 RangeError
@@ -364,6 +386,7 @@ ResizeObserverSize
 Response
 SVGAElement
 SVGAnimatedEnumeration
+SVGAnimatedInteger
 SVGAnimatedLength
 SVGAnimatedLengthList
 SVGAnimatedNumber
@@ -383,6 +406,8 @@ SVGFEBlendElement
 SVGFEColorMatrixElement
 SVGFEComponentTransferElement
 SVGFECompositeElement
+SVGFEDisplacementMapElement
+SVGFEDropShadowElement
 SVGFEFloodElement
 SVGFEFuncAElement
 SVGFEFuncBElement
@@ -394,6 +419,7 @@ SVGFEMergeElement
 SVGFEMergeNodeElement
 SVGFEMorphologyElement
 SVGFEOffsetElement
+SVGFETurbulenceElement
 SVGFilterElement
 SVGForeignObjectElement
 SVGGElement
@@ -411,6 +437,7 @@ SVGMetadataElement
 SVGNumber
 SVGNumberList
 SVGPathElement
+SVGPatternElement
 SVGPoint
 SVGPolygonElement
 SVGPolylineElement
@@ -436,6 +463,7 @@ SVGViewElement
 Screen
 ScreenOrientation
 ScriptProcessorNode
+ScrollTimeline
 SecurityPolicyViolationEvent
 Selection
 Serial
@@ -444,12 +472,22 @@ ServiceWorker
 ServiceWorkerContainer
 ServiceWorkerRegistration
 Set
-ShadowRealm
 ShadowRoot
 SharedArrayBuffer
 SharedWorker
 SourceBuffer
 SourceBufferList
+SpeechGrammar
+SpeechGrammarList
+SpeechRecognition
+SpeechRecognitionAlternative
+SpeechRecognitionEvent
+SpeechRecognitionPhrase
+SpeechRecognitionResult
+SpeechRecognitionResultList
+SpeechSynthesis
+SpeechSynthesisUtterance
+SpeechSynthesisVoice
 StaticRange
 StereoPannerNode
 Storage
@@ -467,6 +505,7 @@ Symbol
 SyntaxError
 Text
 TextDecoder
+TextDecoderStream
 TextEncoder
 TextEncoderStream
 TextEvent
@@ -542,6 +581,12 @@ XMLSerializer
 XPathEvaluator
 XPathExpression
 XPathResult
+XRLayer
+XRRenderState
+XRSession
+XRSessionEvent
+XRSystem
+XRWebGLLayer
 __finishTest
 __preventMultipleTestFunctions
 animationFrame
@@ -554,4 +599,5 @@ removeTestErrorHandler
 spoofCurrentURL
 test
 timeout
+uniqueLocalhostHostname
 webkitURL

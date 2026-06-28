@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 
@@ -16,11 +17,14 @@ class JS_API Cell : public GC::Cell {
     GC_CELL(Cell, GC::Cell);
 
 public:
-    virtual void initialize(Realm&);
+    MUST_UPCALL virtual void initialize(Realm&);
 
-    virtual bool is_generator_result() const { return false; }
+    virtual bool is_environment() const { return false; }
 
-    ALWAYS_INLINE VM& vm() const { return *reinterpret_cast<VM*>(private_data()); }
+    ALWAYS_INLINE VM& vm() const;
+
+    template<typename T>
+    bool fast_is() const = delete;
 };
 
 }

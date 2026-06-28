@@ -8,7 +8,6 @@
 
 #include <LibMedia/PlaybackManager.h>
 #include <LibMedia/PlaybackStates/Forward.h>
-#include <LibMedia/PlaybackStates/PausedStateHandler.h>
 
 namespace Media {
 
@@ -30,10 +29,7 @@ public:
     }
 
     virtual void play() override { }
-    virtual void pause() override
-    {
-        manager().replace_state_handler<PausedStateHandler>();
-    }
+    virtual void pause() override;
 
     virtual bool is_playing() override
     {
@@ -43,6 +39,12 @@ public:
     {
         return PlaybackState::Playing;
     }
+    virtual AvailableData available_data() override
+    {
+        return AvailableData::Future;
+    }
+
+    virtual void on_pipeline_status_changed(PipelineStatus) override;
 };
 
 }

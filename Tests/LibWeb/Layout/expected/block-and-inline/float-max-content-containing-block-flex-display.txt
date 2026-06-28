@@ -1,4 +1,4 @@
-Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-inline
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
   BlockContainer <html> at [0,0] [0+0+0 800 0+0+0] [0+0+0 26 0+0+0] [BFC] children: not-inline
     BlockContainer <body> at [8,8] [8+0+0 784 0+0+8] [8+0+0 0 0+0+8] children: not-inline
       Box <div.display_flex> at [8,8] floating flex-container(row) [0+0+0 23.609375 0+0+0] [0+0+0 18 0+0+0] [FFC] children: not-inline
@@ -15,7 +15,7 @@ Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-
 
 ViewportPaintable (Viewport<#document>) [0,0 800x600]
   PaintableWithLines (BlockContainer<HTML>) [0,0 800x26]
-    PaintableWithLines (BlockContainer<BODY>) [8,8 784x0] overflow: [8,8 23.609375x18]
+    PaintableWithLines (BlockContainer<BODY>) [8,8 784x0]
       PaintableBox (Box<DIV>.display_flex) [8,8 23.609375x18]
         PaintableWithLines (BlockContainer<DIV>) [8,8 23.609375x18]
           PaintableWithLines (BlockContainer<DIV>) [8,8 23.609375x18]
@@ -24,5 +24,5 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
             PaintableWithLines (BlockContainer<SPAN>) [22.265625,8 9.34375x18]
               TextPaintable (TextNode<#text>)
 
-SC for Viewport<#document> [0,0 800x600] [children: 1] (z-index: auto)
- SC for BlockContainer<HTML> [0,0 800x26] [children: 0] (z-index: auto)
+SC for Viewport<#document> [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<HTML> [0,0 800x26] (z-index: auto)

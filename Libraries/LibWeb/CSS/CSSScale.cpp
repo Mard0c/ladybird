@@ -5,7 +5,7 @@
  */
 
 #include "CSSScale.h"
-#include <LibWeb/Bindings/CSSScalePrototype.h>
+#include <LibWeb/Bindings/CSSScale.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSNumericValue.h>
 #include <LibWeb/CSS/CSSUnitValue.h>
@@ -82,55 +82,55 @@ void CSSScale::visit_edges(Visitor& visitor)
 WebIDL::ExceptionOr<Utf16String> CSSScale::to_string() const
 {
     // 1. Let s initially be the empty string.
-    StringBuilder builder { StringBuilder::Mode::UTF16 };
+    Utf16StringBuilder builder;
 
     // 2. If this’s is2D internal slot is false:
     if (!is_2d()) {
 
         // 1. Append "scale3d(" to s.
-        builder.append("scale3d("sv);
+        builder.append_ascii("scale3d("sv);
 
         // 2. Serialize this’s x internal slot, and append it to s.
-        builder.append(TRY(m_x->to_string()));
+        m_x->serialize(builder, {});
 
         // 3. Append ", " to s.
-        builder.append(", "sv);
+        builder.append_ascii(", "sv);
 
         // 4. Serialize this’s y internal slot, and append it to s.
-        builder.append(TRY(m_y->to_string()));
+        m_y->serialize(builder, {});
 
         // 5. Append ", " to s.
-        builder.append(", "sv);
+        builder.append_ascii(", "sv);
 
         // 6. Serialize this’s z internal slot, and append it to s.
-        builder.append(TRY(m_z->to_string()));
+        m_z->serialize(builder, {});
 
         // 7. Append ")" to s, and return s.
-        builder.append(")"sv);
-        return builder.to_utf16_string();
+        builder.append_ascii(')');
+        return builder.to_string();
     }
 
     // 3. Otherwise:
     else {
         // 1. Append "scale(" to s.
-        builder.append("scale("sv);
+        builder.append_ascii("scale("sv);
 
         // 2. Serialize this’s x internal slot, and append it to s.
-        builder.append(TRY(m_x->to_string()));
+        m_x->serialize(builder, {});
 
         // 3. If this’s x and y internal slots are equal numeric values, append ")" to s and return s.
         // AD-HOC: Don't do this - neither Chrome nor Safari show this behavior.
         //         Upstream issue: https://github.com/w3c/css-houdini-drafts/issues/1161
 
         // 4. Otherwise, append ", " to s.
-        builder.append(", "sv);
+        builder.append_ascii(", "sv);
 
         // 5. Serialize this’s y internal slot, and append it to s.
-        builder.append(TRY(m_y->to_string()));
+        m_y->serialize(builder, {});
 
         // 6. Append ")" to s, and return s.
-        builder.append(")"sv);
-        return builder.to_utf16_string();
+        builder.append_ascii(')');
+        return builder.to_string();
     }
 }
 

@@ -20,8 +20,10 @@
 #include <LibWeb/HTML/PluginArray.h>
 #include <LibWeb/HTML/UserActivation.h>
 #include <LibWeb/MediaCapabilitiesAPI/MediaCapabilities.h>
+#include <LibWeb/MediaCapture/MediaDevices.h>
 #include <LibWeb/Serial/Serial.h>
 #include <LibWeb/StorageAPI/NavigatorStorage.h>
+#include <LibWeb/WebLocks/NavigatorLocks.h>
 
 namespace Web::HTML {
 
@@ -36,7 +38,8 @@ class Navigator
     , public NavigatorIDMixin
     , public NavigatorLanguageMixin
     , public NavigatorOnLineMixin
-    , public StorageAPI::NavigatorStorage {
+    , public StorageAPI::NavigatorStorage
+    , public WebLocks::NavigatorLocks {
     WEB_PLATFORM_OBJECT(Navigator, Bindings::PlatformObject);
     GC_DECLARE_ALLOCATOR(Navigator);
 
@@ -66,10 +69,13 @@ public:
     [[nodiscard]] GC::Ref<UserActivation> user_activation();
     [[nodiscard]] GC::Ref<CredentialManagement::CredentialsContainer> credentials();
     [[nodiscard]] GC::Ref<WebIDL::Promise> get_battery();
+    [[nodiscard]] GC::Ref<WebXR::XRSystem> xr();
+    [[nodiscard]] GC::Ref<PermissionsAPI::Permissions> permissions();
 
     GC::Ref<ServiceWorker::ServiceWorkerContainer> service_worker();
 
     GC::Ref<MediaCapabilitiesAPI::MediaCapabilities> media_capabilities();
+    GC::Ref<MediaCapture::MediaDevices> media_devices();
 
     static WebIDL::Long max_touch_points();
 
@@ -85,6 +91,9 @@ private:
 
     // ^StorageAPI::NavigatorStorage
     virtual Bindings::PlatformObject const& this_navigator_storage_object() const override { return *this; }
+
+    // ^WebLocks::NavigatorLocks
+    virtual Bindings::PlatformObject const& this_navigator_locks_object() const override { return *this; }
 
     GC::Ptr<PluginArray> m_plugin_array;
     GC::Ptr<MimeTypeArray> m_mime_type_array;
@@ -107,11 +116,20 @@ private:
     // https://w3c.github.io/media-capabilities/#dom-navigator-mediacapabilities
     GC::Ptr<MediaCapabilitiesAPI::MediaCapabilities> m_media_capabilities;
 
+    // https://w3c.github.io/mediacapture-main/#dom-navigator-mediadevices
+    GC::Ptr<MediaCapture::MediaDevices> m_media_devices;
+
     // https://w3c.github.io/webappsec-credential-management/#framework-credential-management
     GC::Ptr<CredentialManagement::CredentialsContainer> m_credentials;
 
     // https://w3c.github.io/battery/
     GC::Ptr<WebIDL::Promise> m_battery_promise;
+
+    // https://immersive-web.github.io/webxr/#dom-navigator-xr
+    GC::Ptr<WebXR::XRSystem> m_xr;
+
+    // https://w3c.github.io/permissions/#navigator-and-workernavigator-extension
+    GC::Ptr<PermissionsAPI::Permissions> m_permissions;
 };
 
 }

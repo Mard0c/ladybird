@@ -54,7 +54,7 @@ ThrowCompletionOr<void> Reference::put_value(VM& vm, Value value)
 
         // d. If succeeded is false and V.[[Strict]] is true, throw a TypeError exception.
         if (!succeeded && m_strict == Strict::Yes)
-            return vm.throw_completion<TypeError>(ErrorType::ReferenceNullishSetProperty, name(), m_base_value.to_string_without_side_effects());
+            return vm.throw_completion<TypeError>(ErrorType::ReferenceNullishSetProperty, name(), m_base_value);
 
         // e. Return unused.
         return {};
@@ -79,7 +79,7 @@ Completion Reference::throw_reference_error(VM& vm) const
     if (is_private_reference())
         return vm.throw_completion<ReferenceError>(ErrorType::ReferenceUnresolvable);
     else
-        return vm.throw_completion<ReferenceError>(ErrorType::UnknownIdentifier, name().to_string());
+        return vm.throw_completion<ReferenceError>(ErrorType::UnknownIdentifier, name().to_utf16_string());
 }
 
 // 6.2.4.5 GetValue ( V ), https://tc39.es/ecma262/#sec-getvalue
@@ -183,7 +183,7 @@ ThrowCompletionOr<bool> Reference::delete_(VM& vm)
 
         // e. If deleteStatus is false and ref.[[Strict]] is true, throw a TypeError exception.
         if (!delete_status && m_strict == Strict::Yes)
-            return vm.throw_completion<TypeError>(ErrorType::ReferenceNullishDeleteProperty, name(), m_base_value.to_string_without_side_effects());
+            return vm.throw_completion<TypeError>(ErrorType::ReferenceNullishDeleteProperty, name(), m_base_value);
 
         // f. Return deleteStatus.
         return delete_status;

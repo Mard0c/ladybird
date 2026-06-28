@@ -17,8 +17,8 @@ class CSSTransformValue final : public CSSStyleValue {
     GC_DECLARE_ALLOCATOR(CSSTransformValue);
 
 public:
-    [[nodiscard]] static GC::Ref<CSSTransformValue> create(JS::Realm&, Vector<GC::Ref<CSSTransformComponent>>);
-    static WebIDL::ExceptionOr<GC::Ref<CSSTransformValue>> construct_impl(JS::Realm&, GC::RootVector<GC::Root<CSSTransformComponent>>);
+    [[nodiscard]] static GC::Ref<CSSTransformValue> create(JS::Realm&, ReadonlySpan<GC::Ref<CSSTransformComponent>>);
+    static WebIDL::ExceptionOr<GC::Ref<CSSTransformValue>> construct_impl(JS::Realm&, ReadonlySpan<GC::Ref<CSSTransformComponent>> const&);
 
     virtual ~CSSTransformValue() override;
 
@@ -30,7 +30,7 @@ public:
     bool is_2d() const;
     WebIDL::ExceptionOr<GC::Ref<Geometry::DOMMatrix>> to_matrix() const;
 
-    virtual WebIDL::ExceptionOr<String> to_string() const override;
+    virtual WebIDL::ExceptionOr<Utf16String> to_string() const override;
 
     virtual WebIDL::ExceptionOr<NonnullRefPtr<StyleValue const>> create_an_internal_representation(PropertyNameAndID const&, PerformTypeCheck) const override;
 

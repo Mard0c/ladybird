@@ -7,7 +7,7 @@
 
 #include <LibGC/Function.h>
 #include <LibJS/Runtime/Realm.h>
-#include <LibWeb/Bindings/DataTransferItemPrototype.h>
+#include <LibWeb/Bindings/DataTransferItem.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/FileAPI/File.h>
 #include <LibWeb/HTML/DataTransfer.h>
@@ -113,7 +113,7 @@ void DataTransferItem::get_as_string(GC::Ptr<WebIDL::CallbackType> callback) con
 
     // 4. Otherwise, queue a task to invoke callback, passing the actual data of the item represented by the
     //    DataTransferItem object as the argument.
-    auto data = JS::PrimitiveString::create(vm, MUST(String::from_utf8({ item.data })));
+    auto data = JS::PrimitiveString::create(vm, Utf16String::from_utf8({ item.data }));
 
     HTML::queue_a_task(HTML::Task::Source::Unspecified, nullptr, nullptr,
         GC::Function<void()>::create(realm.heap(), [callback, data]() {
@@ -143,10 +143,12 @@ GC::Ptr<FileAPI::File> DataTransferItem::get_as_file() const
     auto file_name = MUST(String::from_byte_string(item.file_name));
 
     // FIXME: Fill in other fields (e.g. last_modified).
-    FileAPI::FilePropertyBag options {};
+    Bindings::FilePropertyBag options {};
     options.type = item.type_string;
 
-    return MUST(FileAPI::File::create(realm, { GC::make_root(blob) }, file_name, move(options)));
+    FileAPI::BlobParts file_bits {};
+    file_bits.append(blob);
+    return MUST(FileAPI::File::create(realm, file_bits, file_name, move(options)));
 }
 
 // https://wicg.github.io/entries-api/#dom-datatransferitem-webkitgetasentry

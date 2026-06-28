@@ -9,7 +9,7 @@
 #include <AK/Optional.h>
 #include <AK/RedBlackTree.h>
 #include <LibWeb/Animations/AnimationEffect.h>
-#include <LibWeb/Bindings/KeyframeEffectPrototype.h>
+#include <LibWeb/Bindings/KeyframeEffect.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleValues/StyleValue.h>
@@ -18,13 +18,8 @@ namespace Web::Animations {
 
 using EasingValue = Variant<String, CSS::EasingFunction>;
 
-// https://www.w3.org/TR/web-animations-1/#the-keyframeeffectoptions-dictionary
-struct KeyframeEffectOptions : public EffectTiming {
-    Bindings::CompositeOperation composite { Bindings::CompositeOperation::Replace };
-    Optional<String> pseudo_element {};
-};
-
 Bindings::CompositeOperation css_animation_composition_to_bindings_composite_operation(CSS::AnimationComposition composition);
+Bindings::CompositeOperationOrAuto css_animation_composition_to_bindings_composite_operation_or_auto(CSS::AnimationComposition composition);
 
 // https://www.w3.org/TR/web-animations-1/#dictdef-basepropertyindexedkeyframe
 // Note: This is an intermediate structure used only when parsing Keyframes provided by the caller in a slightly
@@ -69,6 +64,7 @@ public:
             // before they are applied to an element
             HashMap<CSS::PropertyID, Variant<UseInitial, NonnullRefPtr<CSS::StyleValue const>>> properties {};
             Bindings::CompositeOperationOrAuto composite { Bindings::CompositeOperationOrAuto::Auto };
+            Variant<Empty, CSS::EasingFunction, NonnullRefPtr<CSS::StyleValue const>> easing {};
         };
         RedBlackTree<u64, ResolvedKeyFrame> keyframes_by_key;
     };
@@ -80,9 +76,9 @@ public:
 
     static WebIDL::ExceptionOr<GC::Ref<KeyframeEffect>> construct_impl(
         JS::Realm&,
-        GC::Root<DOM::Element> const& target,
-        Optional<GC::Root<JS::Object>> const& keyframes,
-        Variant<double, KeyframeEffectOptions> options = KeyframeEffectOptions {});
+        GC::Ptr<DOM::Element> target,
+        GC::Ptr<JS::Object> keyframes,
+        Variant<double, Bindings::KeyframeEffectOptions> options = Bindings::KeyframeEffectOptions {});
 
     static WebIDL::ExceptionOr<GC::Ref<KeyframeEffect>> construct_impl(JS::Realm&, GC::Ref<KeyframeEffect> source);
 
@@ -93,14 +89,17 @@ public:
     Optional<String> pseudo_element() const;
     WebIDL::ExceptionOr<void> set_pseudo_element(Optional<String>);
 
+    Optional<DOM::AbstractElement> target_abstract_element() const;
+    void set_target(DOM::AbstractElement);
+
     Optional<CSS::PseudoElement> pseudo_element_type() const;
     void set_pseudo_element(Optional<CSS::Selector::PseudoElementSelector> pseudo_element) { m_target_pseudo_selector = pseudo_element; }
 
     Bindings::CompositeOperation composite() const { return m_composite; }
-    void set_composite(Bindings::CompositeOperation value) { m_composite = value; }
+    void set_composite(Bindings::CompositeOperation value);
 
     WebIDL::ExceptionOr<GC::RootVector<JS::Object*>> get_keyframes();
-    WebIDL::ExceptionOr<void> set_keyframes(Optional<GC::Root<JS::Object>> const&);
+    WebIDL::ExceptionOr<void> set_keyframes(GC::Ptr<JS::Object>);
 
     KeyFrameSet const* key_frame_set() { return m_key_frame_set; }
     void set_key_frame_set(RefPtr<KeyFrameSet const> key_frame_set) { m_key_frame_set = key_frame_set; }
@@ -108,13 +107,13 @@ public:
     virtual bool is_keyframe_effect() const override { return true; }
 
     virtual void update_computed_properties(AnimationUpdateContext&) override;
-
-    Optional<CSS::AnimationPlayState> last_css_animation_play_state() const { return m_last_css_animation_play_state; }
-    void set_last_css_animation_play_state(CSS::AnimationPlayState state) { m_last_css_animation_play_state = state; }
+    void update_computed_properties_for_style(AnimationUpdateContext&, DOM::AbstractElement, CSS::ComputedProperties&);
 
 private:
     KeyframeEffect(JS::Realm&);
     virtual ~KeyframeEffect() override = default;
+
+    void invalidate_effect();
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -135,8 +134,6 @@ private:
     Vector<GC::Ref<JS::Object>> m_keyframe_objects {};
 
     RefPtr<KeyFrameSet const> m_key_frame_set {};
-
-    Optional<CSS::AnimationPlayState> m_last_css_animation_play_state;
 };
 
 }

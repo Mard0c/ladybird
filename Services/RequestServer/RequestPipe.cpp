@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/SocketAddress.h>
 #include <LibCore/System.h>
 #include <RequestServer/RequestPipe.h>
 
@@ -42,32 +43,25 @@ RequestPipe::~RequestPipe()
 
 ErrorOr<RequestPipe> RequestPipe::create()
 {
-#if defined(AK_OS_WINDOWS)
     int socket_fds[2] {};
     TRY(Core::System::socketpair(AF_LOCAL, SOCK_STREAM, 0, socket_fds));
     int option = 1;
-    TRY(Core::System::ioctl(socket_fds[0], FIONBIO, option));
-    TRY(Core::System::ioctl(socket_fds[1], FIONBIO, option));
+    TRY(Core::System::ioctl(socket_fds[0], FIONBIO, &option));
+    TRY(Core::System::ioctl(socket_fds[1], FIONBIO, &option));
+
+    // Increase socket buffer sizes from OS default (~8KB on macOS) to allow
+    // larger writes/reads per syscall, significantly improving throughput for
+    // large response bodies.
+    static constexpr int buffer_size = 512 * KiB;
+    (void)Core::System::setsockopt(socket_fds[0], SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size));
+    (void)Core::System::setsockopt(socket_fds[1], SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size));
+
     return RequestPipe(socket_fds[0], socket_fds[1]);
-#else
-    auto fds = TRY(Core::System::pipe2(O_NONBLOCK));
-    return RequestPipe(fds[0], fds[1]);
-#endif
 }
 
-ErrorOr<ssize_t> RequestPipe::write(ReadonlyBytes bytes)
+ErrorOr<size_t> RequestPipe::write(ReadonlyBytes bytes)
 {
-#if defined(AK_OS_WINDOWS)
-    auto sent = ::send(m_writer_fd, reinterpret_cast<char const*>(bytes.data()), bytes.size(), 0);
-    if (sent == SOCKET_ERROR) {
-        if (WSAGetLastError() == WSAEWOULDBLOCK)
-            return Error::from_errno(EWOULDBLOCK);
-        return Error::from_windows_error();
-    }
-    return sent;
-#else
-    return Core::System::write(m_writer_fd, bytes);
-#endif
+    return Core::System::send(m_writer_fd, bytes, MSG_NOSIGNAL);
 }
 
 }

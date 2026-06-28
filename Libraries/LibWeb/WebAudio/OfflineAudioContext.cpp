@@ -6,9 +6,11 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/OfflineAudioCompletionEvent.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/EventNames.h>
-#include <LibWeb/HTML/Navigable.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/WebAudio/AudioBuffer.h>
@@ -21,7 +23,7 @@ namespace Web::WebAudio {
 GC_DEFINE_ALLOCATOR(OfflineAudioContext);
 
 // https://webaudio.github.io/web-audio-api/#dom-offlineaudiocontext-offlineaudiocontext
-WebIDL::ExceptionOr<GC::Ref<OfflineAudioContext>> OfflineAudioContext::construct_impl(JS::Realm& realm, OfflineAudioContextOptions const& context_options)
+WebIDL::ExceptionOr<GC::Ref<OfflineAudioContext>> OfflineAudioContext::construct_impl(JS::Realm& realm, Bindings::OfflineAudioContextOptions const& context_options)
 {
     // AD-HOC: This spec text is currently only mentioned in the constructor overload that takes separate arguments,
     //         but these parameters should be validated for both constructors.
@@ -53,10 +55,17 @@ WebIDL::ExceptionOr<GC::Ref<OfflineAudioContext>> OfflineAudioContext::construct
 }
 
 // https://webaudio.github.io/web-audio-api/#dom-offlineaudiocontext-offlineaudiocontext-numberofchannels-length-samplerate
-WebIDL::ExceptionOr<GC::Ref<OfflineAudioContext>> OfflineAudioContext::construct_impl(JS::Realm& realm,
-    WebIDL::UnsignedLong number_of_channels, WebIDL::UnsignedLong length, float sample_rate)
+WebIDL::ExceptionOr<GC::Ref<OfflineAudioContext>> OfflineAudioContext::construct_impl(
+    JS::Realm& realm,
+    WebIDL::UnsignedLong number_of_channels,
+    WebIDL::UnsignedLong length,
+    float sample_rate)
 {
-    return construct_impl(realm, { number_of_channels, length, sample_rate });
+    Bindings::OfflineAudioContextOptions options {};
+    options.number_of_channels = number_of_channels;
+    options.length = length;
+    options.sample_rate = sample_rate;
+    return construct_impl(realm, options);
 }
 
 OfflineAudioContext::~OfflineAudioContext() = default;
@@ -119,17 +128,16 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> OfflineAudioContext::start_renderi
 
 void OfflineAudioContext::begin_offline_rendering(GC::Ref<WebIDL::Promise> promise)
 {
-    auto& realm = this->realm();
     // To begin offline rendering, the following steps MUST happen on a rendering thread that is created for the occasion.
     // FIXME: 1: Given the current connections and scheduled changes, start rendering length sample-frames of audio into [[rendered buffer]]
     // FIXME: 2: For every render quantum, check and suspend rendering if necessary.
     // FIXME: 3: If a suspended context is resumed, continue to render the buffer.
     // 4: Once the rendering is complete, queue a media element task to execute the following steps:
-    queue_a_media_element_task(GC::create_function(heap(), [&realm, promise, this]() {
-        HTML::TemporaryExecutionContext context(realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes);
+    queue_a_media_element_task(GC::create_function(heap(), [promise, this]() {
+        HTML::TemporaryExecutionContext context(this->realm(), HTML::TemporaryExecutionContext::CallbacksEnabled::Yes);
 
         // 4.1 Resolve the promise created by startRendering() with [[rendered buffer]].
-        WebIDL::resolve_promise(realm, promise, this->m_rendered_buffer);
+        WebIDL::resolve_promise(this->realm(), promise, this->m_rendered_buffer);
 
         // AD-HOC: Remove resolved promise from [[pending promises]]
         // https://github.com/WebAudio/web-audio-api/issues/2648
@@ -139,16 +147,16 @@ void OfflineAudioContext::begin_offline_rendering(GC::Ref<WebIDL::Promise> promi
 
         // 4.2: Queue a media element task to fire an event named complete at the OfflineAudioContext using OfflineAudioCompletionEvent
         //      whose renderedBuffer property is set to [[rendered buffer]].
-        queue_a_media_element_task(GC::create_function(heap(), [&realm, this]() {
-            auto event_init = OfflineAudioCompletionEventInit {
+        queue_a_media_element_task(GC::create_function(heap(), [this]() {
+            auto event_init = Bindings::OfflineAudioCompletionEventInit {
                 {
                     .bubbles = false,
                     .cancelable = false,
                     .composed = false,
                 },
-                this->m_rendered_buffer,
+                *this->m_rendered_buffer,
             };
-            auto event = MUST(OfflineAudioCompletionEvent::construct_impl(realm, HTML::EventNames::complete, event_init));
+            auto event = MUST(OfflineAudioCompletionEvent::construct_impl(this->realm(), HTML::EventNames::complete, event_init));
             this->dispatch_event(event);
         }));
     }));

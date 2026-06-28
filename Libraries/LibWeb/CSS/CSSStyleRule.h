@@ -42,10 +42,11 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
     virtual void clear_caches() override;
     virtual String serialized() const override;
+    virtual void dump(StringBuilder&, int indent_levels) const override;
 
     virtual void set_parent_style_sheet(CSSStyleSheet*) override;
 
-    CSSStyleRule const* parent_style_rule() const;
+    GC::Ptr<CSSRule const> nesting_parent_rule() const;
 
     SelectorList m_selectors;
     mutable Optional<SelectorList> m_cached_absolutized_selectors;

@@ -6,8 +6,8 @@
 
 #pragma once
 
+#include <AK/Utf16StringBuilder.h>
 #include <LibWeb/DOM/Comment.h>
-#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/Text.h>
@@ -21,7 +21,7 @@ enum class XMLScriptingSupport {
     Enabled,
 };
 
-ErrorOr<Variant<ByteString, Vector<XML::MarkupDeclaration>>> resolve_xml_resource(XML::SystemID const&, Optional<XML::PublicID> const&);
+Optional<String> resolve_named_html_entity(StringView entity_name);
 
 class XMLDocumentBuilder final : public XML::Listener {
 public:
@@ -52,7 +52,7 @@ private:
     GC::Ptr<DOM::Node> m_current_node;
     XMLScriptingSupport m_scripting_support { XMLScriptingSupport::Enabled };
     bool m_has_error { false };
-    StringBuilder m_text_builder { StringBuilder::Mode::UTF16 };
+    Utf16StringBuilder m_text_builder;
 
     struct NamespaceStackEntry {
         Vector<NamespaceAndPrefix, 2> namespaces;

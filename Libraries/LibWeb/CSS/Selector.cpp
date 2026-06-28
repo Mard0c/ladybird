@@ -1,12 +1,15 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2026, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Selector.h"
 #include <AK/GenericShorthands.h>
+#include <AK/NeverDestroyed.h>
+#include <LibWeb/CSS/AncestorFilter.h>
+#include <LibWeb/CSS/CSSStyleRule.h>
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
 #include <LibWeb/CSS/Serialize.h>
 
@@ -17,19 +20,11 @@ static bool component_value_contains_nesting_selector(Parser::ComponentValue con
     if (component_value.is_delim('&'))
         return true;
 
-    if (component_value.is_block()) {
-        for (auto const& child_value : component_value.block().value) {
-            if (component_value_contains_nesting_selector(child_value))
-                return true;
-        }
-    }
+    if (component_value.is_block())
+        return component_value.block().value.contains(component_value_contains_nesting_selector);
 
-    if (component_value.is_function()) {
-        for (auto const& child_value : component_value.function().value) {
-            if (component_value_contains_nesting_selector(child_value))
-                return true;
-        }
-    }
+    if (component_value.is_function())
+        return component_value.function().value.contains(component_value_contains_nesting_selector);
 
     return false;
 }
@@ -48,6 +43,7 @@ static bool can_selector_use_fast_matches(Selector const& selector)
                 if (!first_is_one_of(pseudo_class,
                         PseudoClass::Active,
                         PseudoClass::AnyLink,
+                        PseudoClass::Autofill,
                         PseudoClass::Checked,
                         PseudoClass::Disabled,
                         PseudoClass::Empty,
@@ -83,14 +79,28 @@ static bool can_selector_use_fast_matches(Selector const& selector)
 Selector::Selector(Vector<CompoundSelector>&& compound_selectors)
     : m_compound_selectors(move(compound_selectors))
 {
-    // FIXME: This assumes that only one pseudo-element is allowed in a selector, and that it appears at the end.
-    //        This is not true in Selectors-4!
+    for (auto const& compound_selector : m_compound_selectors) {
+        if (compound_selector.combinator == Combinator::PseudoElement)
+            m_contains_pseudo_element_transition = true;
+
+        for (auto const& simple_selector : compound_selector.simple_selectors) {
+            if (simple_selector.type != SimpleSelector::Type::PseudoElement)
+                continue;
+
+            if (simple_selector.pseudo_element().type() == PseudoElement::Slotted)
+                m_contains_slotted_pseudo_element = true;
+            if (simple_selector.pseudo_element().type() == PseudoElement::Part)
+                m_contains_part_pseudo_element = true;
+        }
+    }
+
     if (!m_compound_selectors.is_empty()) {
-        for (auto const& simple_selector : m_compound_selectors.last().simple_selectors) {
-            if (simple_selector.type == SimpleSelector::Type::PseudoElement) {
-                m_pseudo_element = simple_selector.pseudo_element();
-                break;
-            }
+        auto const& rightmost_compound = m_compound_selectors.last();
+        if (!rightmost_compound.simple_selectors.is_empty()
+            && rightmost_compound.simple_selectors.first().type == SimpleSelector::Type::PseudoElement) {
+            auto pseudo_element = rightmost_compound.simple_selectors.first().pseudo_element().type();
+            if (!first_is_one_of(pseudo_element, PseudoElement::Slotted, PseudoElement::Part))
+                m_target_pseudo_element = pseudo_element;
         }
     }
 
@@ -145,44 +155,247 @@ void Selector::collect_ancestor_hashes()
     }
 
     size_t next_hash_index = 0;
-    auto append_unique_hash = [&](u32 hash) -> bool {
-        if (next_hash_index >= m_ancestor_hashes.size())
-            return true;
-        for (size_t i = 0; i < next_hash_index; ++i) {
-            if (m_ancestor_hashes[i] == hash)
-                return false;
-        }
-        m_ancestor_hashes[next_hash_index++] = hash;
-        return false;
-    };
+    struct AncestorHashCollector {
+        enum class IncludeRightmostCompound : bool {
+            No,
+            Yes,
+        };
 
-    auto last_combinator = m_compound_selectors.last().combinator;
-    for (ssize_t compound_selector_index = static_cast<ssize_t>(m_compound_selectors.size()) - 2; compound_selector_index >= 0; --compound_selector_index) {
-        auto const& compound_selector = m_compound_selectors[compound_selector_index];
-        if (last_combinator == Combinator::Descendant || last_combinator == Combinator::ImmediateChild) {
-            m_can_use_ancestor_filter = true;
-            for (auto const& simple_selector : compound_selector.simple_selectors) {
-                switch (simple_selector.type) {
-                case SimpleSelector::Type::Id:
-                case SimpleSelector::Type::Class:
-                    if (append_unique_hash(simple_selector.name().hash()))
-                        return;
-                    break;
-                case SimpleSelector::Type::TagName:
-                    if (append_unique_hash(simple_selector.qualified_name().name.lowercase_name.hash()))
-                        return;
-                    break;
-                case SimpleSelector::Type::Attribute:
-                    if (append_unique_hash(simple_selector.attribute().qualified_name.name.lowercase_name.hash()))
-                        return;
-                    break;
-                default:
-                    break;
+        Array<u32, 8>& ancestor_hashes;
+        size_t& next_hash_index;
+
+        static bool contains_hash(Vector<u32> const& hashes, u32 hash)
+        {
+            for (auto existing_hash : hashes) {
+                if (existing_hash == hash)
+                    return true;
+            }
+            return false;
+        }
+
+        static void append_unique_hash(Vector<u32>& hashes, u32 hash)
+        {
+            if (!contains_hash(hashes, hash))
+                hashes.append(hash);
+        }
+
+        static void intersect_hashes(Vector<u32>& hashes, Vector<u32> const& other_hashes)
+        {
+            for (size_t i = 0; i < hashes.size();) {
+                if (contains_hash(other_hashes, hashes[i])) {
+                    ++i;
+                    continue;
                 }
+                hashes.remove(i);
             }
         }
-        last_combinator = compound_selector.combinator;
+
+        bool append_unique_hash(u32 hash)
+        {
+            if (next_hash_index >= ancestor_hashes.size())
+                return true;
+            for (size_t i = 0; i < next_hash_index; ++i) {
+                if (ancestor_hashes[i] == hash)
+                    return false;
+            }
+            ancestor_hashes[next_hash_index++] = hash;
+            return false;
+        }
+
+        Vector<u32> hashes_from_simple_selector(SimpleSelector const& simple_selector)
+        {
+            Vector<u32> hashes;
+            switch (simple_selector.type) {
+            case SimpleSelector::Type::Id:
+                hashes.append(ancestor_filter_hash_for_id(simple_selector.name().hash()));
+                break;
+            case SimpleSelector::Type::Class:
+                hashes.append(ancestor_filter_hash_for_class(simple_selector.name().hash()));
+                break;
+            case SimpleSelector::Type::TagName:
+                hashes.append(ancestor_filter_hash_for_tag_name(simple_selector.qualified_name().name.lowercase_name.hash()));
+                break;
+            case SimpleSelector::Type::Attribute:
+                hashes.append(ancestor_filter_hash_for_attribute(simple_selector.attribute().qualified_name.name.lowercase_name.hash()));
+                break;
+            case SimpleSelector::Type::PseudoClass: {
+                auto const& pseudo_class = simple_selector.pseudo_class();
+                if (pseudo_class.type != PseudoClass::Is && pseudo_class.type != PseudoClass::Where)
+                    break;
+
+                // The selector's ancestor hashes are all mandatory. For :is()/:where(), only
+                // hashes required by every alternative can reject the selector without running it.
+                hashes = common_hashes_from_selector_list(pseudo_class.argument_selector_list, IncludeRightmostCompound::Yes);
+                break;
+            }
+            default:
+                break;
+            }
+            return hashes;
+        }
+
+        Vector<u32> hashes_from_compound(CompoundSelector const& compound_selector)
+        {
+            Vector<u32> hashes;
+            for (auto const& simple_selector : compound_selector.simple_selectors) {
+                for (auto hash : hashes_from_simple_selector(simple_selector))
+                    append_unique_hash(hashes, hash);
+            }
+            return hashes;
+        }
+
+        Vector<u32> hashes_from_subject_compound_selector_list_pseudo_classes(CompoundSelector const& compound_selector)
+        {
+            Vector<u32> hashes;
+            for (auto const& simple_selector : compound_selector.simple_selectors) {
+                if (simple_selector.type != SimpleSelector::Type::PseudoClass)
+                    continue;
+
+                auto const& pseudo_class = simple_selector.pseudo_class();
+                if (pseudo_class.type != PseudoClass::Is && pseudo_class.type != PseudoClass::Where)
+                    continue;
+
+                for (auto hash : common_hashes_from_selector_list(pseudo_class.argument_selector_list, IncludeRightmostCompound::No))
+                    append_unique_hash(hashes, hash);
+            }
+            return hashes;
+        }
+
+        Vector<u32> hashes_from_selector(Selector const& selector, IncludeRightmostCompound include_rightmost_compound)
+        {
+            Vector<u32> hashes;
+            auto const& compound_selectors = selector.compound_selectors();
+            if (compound_selectors.is_empty())
+                return hashes;
+
+            if (include_rightmost_compound == IncludeRightmostCompound::Yes) {
+                // A selector-list pseudo-class in an ancestor compound matches that ancestor.
+                // The argument selector's rightmost compound is therefore on the subject's
+                // ancestor chain.
+                for (auto hash : hashes_from_compound(compound_selectors.last()))
+                    append_unique_hash(hashes, hash);
+            } else {
+                // A selector-list pseudo-class in the subject compound can still contain
+                // ancestor requirements inside its alternatives, e.g. `:is(.foo > .bar)`.
+                for (auto hash : hashes_from_subject_compound_selector_list_pseudo_classes(compound_selectors.last()))
+                    append_unique_hash(hashes, hash);
+            }
+
+            auto combinator_to_right = compound_selectors.last().combinator;
+            for (ssize_t i = static_cast<ssize_t>(compound_selectors.size()) - 2; i >= 0; --i) {
+                auto const& compound_selector = compound_selectors[i];
+
+                switch (combinator_to_right) {
+                case Combinator::Descendant:
+                case Combinator::ImmediateChild:
+                case Combinator::PseudoElement:
+                    for (auto hash : hashes_from_compound(compound_selector))
+                        append_unique_hash(hashes, hash);
+                    break;
+                case Combinator::NextSibling:
+                case Combinator::SubsequentSibling:
+                    break;
+                case Combinator::Column:
+                default:
+                    return hashes;
+                }
+
+                combinator_to_right = compound_selector.combinator;
+            }
+
+            return hashes;
+        }
+
+        Vector<u32> common_hashes_from_selector_list(SelectorList const& selector_list, IncludeRightmostCompound include_rightmost_compound)
+        {
+            if (selector_list.is_empty())
+                return {};
+
+            Optional<Vector<u32>> common_hashes;
+            for (auto const& argument_selector : selector_list) {
+                auto hashes = hashes_from_selector(*argument_selector, include_rightmost_compound);
+                if (!common_hashes.has_value()) {
+                    common_hashes = move(hashes);
+                    continue;
+                }
+
+                intersect_hashes(common_hashes.value(), hashes);
+                if (common_hashes->is_empty())
+                    break;
+            }
+
+            return common_hashes.release_value();
+        }
+
+        bool append_hashes_from_simple_selector(SimpleSelector const& simple_selector)
+        {
+            for (auto hash : hashes_from_simple_selector(simple_selector)) {
+                if (append_unique_hash(hash))
+                    return true;
+            }
+            return false;
+        }
+
+        bool append_hashes_from_compound(CompoundSelector const& compound_selector)
+        {
+            for (auto const& simple_selector : compound_selector.simple_selectors) {
+                if (append_hashes_from_simple_selector(simple_selector))
+                    return true;
+            }
+            return false;
+        }
+    };
+    AncestorHashCollector ancestor_hash_collector { m_ancestor_hashes, next_hash_index };
+
+    for (auto hash : ancestor_hash_collector.hashes_from_subject_compound_selector_list_pseudo_classes(m_compound_selectors.last())) {
+        if (ancestor_hash_collector.append_unique_hash(hash)) {
+            m_can_use_ancestor_filter = (next_hash_index > 0);
+            return;
+        }
     }
+
+    // Walk from the compound immediately to the left of the subject toward the left.
+    // The combinator that connects `i` to `i+1` is stored on `i+1`.
+    auto combinator_to_right = m_compound_selectors.last().combinator;
+
+    // If we cross a sibling combinator, compounds further to the left are not ancestors of the subject,
+    // but they *are* ancestors of that sibling and therefore shared ancestors of the subject (since siblings
+    // share all ancestors above their parent). We can safely require tokens from those shared ancestors.
+    for (ssize_t i = static_cast<ssize_t>(m_compound_selectors.size()) - 2; i >= 0; --i) {
+        auto const& compound_selector = m_compound_selectors[i];
+
+        switch (combinator_to_right) {
+        case Combinator::Descendant:
+        case Combinator::ImmediateChild:
+        case Combinator::PseudoElement:
+            // This compound is on the ancestor axis (directly, as the originating element for a pseudo-element,
+            // or as a shared ancestor past a sibling boundary).
+            if (ancestor_hash_collector.append_hashes_from_compound(compound_selector)) {
+                m_can_use_ancestor_filter = (next_hash_index > 0);
+                return;
+            }
+            break;
+
+        case Combinator::NextSibling:
+        case Combinator::SubsequentSibling:
+            // The compound immediately to the left is a sibling constraint, not an ancestor.
+            // Do not collect hashes from it.
+            break;
+
+        case Combinator::Column:
+        default:
+            // Not representable by the ancestor-hash filter.
+            next_hash_index = 0;
+            m_can_use_ancestor_filter = false;
+            for (auto& slot : m_ancestor_hashes)
+                slot = 0;
+            return;
+        }
+
+        combinator_to_right = compound_selector.combinator;
+    }
+
+    m_can_use_ancestor_filter = (next_hash_index > 0);
 
     for (size_t i = next_hash_index; i < m_ancestor_hashes.size(); ++i)
         m_ancestor_hashes[i] = 0;
@@ -266,9 +479,14 @@ u32 Selector::specificity() const
                 ++tag_names;
                 break;
             case SimpleSelector::Type::PseudoElement:
+                // https://drafts.csswg.org/css-view-transitions-1/#named-view-transition-pseudo
+                // The specificity of a named view transition pseudo-element selector with a <custom-ident> argument is equivalent
+                // to a type selector. The specificity of a named view transition pseudo-element selector with a '*' argument is zero.
+                // NB: We just break before adding to the type (tag name) specificity in case this is a named view transition pseudo that uses '*'
+                if (first_is_one_of(simple_selector.pseudo_element().type(), CSS::PseudoElement::ViewTransitionGroup, CSS::PseudoElement::ViewTransitionImagePair, CSS::PseudoElement::ViewTransitionOld, CSS::PseudoElement::ViewTransitionNew) && simple_selector.pseudo_element().pt_name_selector().is_universal)
+                    break;
+
                 // count the number of type selectors and pseudo-elements in the selector (= C)
-                // FIXME: This needs special handling for view transition pseudos:
-                //        https://drafts.csswg.org/css-view-transitions-1/#named-view-transition-pseudo
                 ++tag_names;
                 break;
             case SimpleSelector::Type::Universal:
@@ -308,9 +526,9 @@ String Selector::PseudoElementSelector::serialize() const
     }
 
     m_value.visit(
-        [&builder](NonnullRefPtr<Selector> const& compund_selector) {
+        [&builder](NonnullRefPtr<Selector> const& compound_selector) {
             builder.append('(');
-            builder.append(compund_selector->serialize());
+            builder.append(compound_selector->serialize());
             builder.append(')');
         },
         [&builder](PTNameSelector const& pt_name_selector) {
@@ -319,6 +537,17 @@ String Selector::PseudoElementSelector::serialize() const
                 builder.append('*');
             else
                 builder.append(pt_name_selector.value);
+            builder.append(')');
+        },
+        [&builder](IdentList const& ident_list) {
+            builder.append('(');
+            bool first = true;
+            for (auto const& ident : ident_list) {
+                if (!first)
+                    builder.append(' ');
+                first = false;
+                builder.append(serialize_an_identifier(ident));
+            }
             builder.append(')');
         },
         [](Empty const&) {});
@@ -538,18 +767,34 @@ String Selector::serialize() const
         case Combinator::Column:
             s.append("|| "sv);
             break;
+        case Combinator::PseudoElement:
         default:
             break;
         }
     }
 
-    // To serialize a selector let s be the empty string, run the steps below for each part of the chain of the selector, and finally return s:
+    // To serialize a selector let s be the empty string, run the steps below for each part of the chain of the
+    // selector, and finally return s:
     for (size_t i = 0; i < compound_selectors().size(); ++i) {
         auto const& compound_selector = compound_selectors()[i];
-        // 1. If there is only one simple selector in the compound selectors which is a universal selector, append the result of serializing the universal selector to s.
+        // 1. If there is only one simple selector in the compound selectors which is a universal selector, append the
+        //    result of serializing the universal selector to s.
         if (compound_selector.simple_selectors.size() == 1
-            && compound_selector.simple_selectors.first().type == Selector::SimpleSelector::Type::Universal) {
-            s.append(compound_selector.simple_selectors.first().serialize());
+            && compound_selector.simple_selectors.first().type == SimpleSelector::Type::Universal) {
+            // NB: Because we've split any compound selectors that contain pseudo-elements, eg `*::before` becomes two
+            //     CompoundSelectors, we have to include the following CompoundSelector as well.
+            bool should_serialize_universal = !compound_selector.is_implicit_universal_anchor;
+            if (should_serialize_universal
+                && i != compound_selectors().size() - 1
+                && compound_selectors()[i + 1].combinator == Combinator::PseudoElement) {
+                auto qualified_name = compound_selector.simple_selectors.first().qualified_name();
+                if (qualified_name.namespace_type == SimpleSelector::QualifiedName::NamespaceType::Default
+                    || qualified_name.namespace_type == SimpleSelector::QualifiedName::NamespaceType::Any) {
+                    should_serialize_universal = false;
+                }
+            }
+            if (should_serialize_universal)
+                s.append(compound_selector.simple_selectors.first().serialize());
         }
         // 2. Otherwise, for each simple selector in the compound selectors that is not a universal selector
         //    of which the namespace prefix maps to a namespace that is not the default namespace
@@ -557,6 +802,8 @@ String Selector::serialize() const
         else {
             for (auto& simple_selector : compound_selector.simple_selectors) {
                 if (simple_selector.type == SimpleSelector::Type::Universal) {
+                    if (compound_selector.is_implicit_universal_anchor)
+                        continue;
                     auto qualified_name = simple_selector.qualified_name();
                     if (qualified_name.namespace_type == SimpleSelector::QualifiedName::NamespaceType::Default
                         || qualified_name.namespace_type == SimpleSelector::QualifiedName::NamespaceType::Any)
@@ -577,22 +824,25 @@ String Selector::serialize() const
         //    followed by the combinator ">", "+", "~", ">>", "||", as appropriate, followed by another
         //    single SPACE (U+0020) if the combinator was not whitespace, to s.
         if (i != compound_selectors().size() - 1) {
-            s.append(' ');
-            // Note: The combinator that appears between parts `i` and `i+1` appears with the `i+1` selector,
-            //       so we have to check that one.
+            // NB: The combinator that appears between parts `i` and `i+1` appears with the `i+1` selector,
+            //     so we have to check that one.
             switch (compound_selectors()[i + 1].combinator) {
-            case Selector::Combinator::ImmediateChild:
-                s.append("> "sv);
+            case Combinator::Descendant:
+                s.append(' ');
                 break;
-            case Selector::Combinator::NextSibling:
-                s.append("+ "sv);
+            case Combinator::ImmediateChild:
+                s.append(" > "sv);
                 break;
-            case Selector::Combinator::SubsequentSibling:
-                s.append("~ "sv);
+            case Combinator::NextSibling:
+                s.append(" + "sv);
                 break;
-            case Selector::Combinator::Column:
-                s.append("|| "sv);
+            case Combinator::SubsequentSibling:
+                s.append(" ~ "sv);
                 break;
+            case Combinator::Column:
+                s.append(" || "sv);
+                break;
+            case Combinator::PseudoElement:
             default:
                 break;
             }
@@ -605,6 +855,22 @@ String Selector::serialize() const
     }
 
     return MUST(s.to_string());
+}
+
+// https://drafts.csswg.org/selectors-4/#single-colon-pseudos
+bool is_legacy_single_colon_pseudo_element(PseudoElement pseudo_element)
+{
+    // The four Level 2 pseudo-elements (::before, ::after, ::first-line, and ::first-letter) may, for legacy reasons,
+    // be written with only a single ":" character at their front, making them resemble a <pseudo-class-selector>.
+    switch (pseudo_element) {
+    case PseudoElement::After:
+    case PseudoElement::Before:
+    case PseudoElement::FirstLetter:
+    case PseudoElement::FirstLine:
+        return true;
+    default:
+        return false;
+    }
 }
 
 // https://www.w3.org/TR/cssom/#serialize-a-group-of-selectors
@@ -641,11 +907,9 @@ bool Selector::contains_unknown_webkit_pseudo_element() const
     for (auto const& compound_selector : m_compound_selectors) {
         for (auto const& simple_selector : compound_selector.simple_selectors) {
             if (simple_selector.type == SimpleSelector::Type::PseudoClass) {
-                for (auto const& child_selector : simple_selector.pseudo_class().argument_selector_list) {
-                    if (child_selector->contains_unknown_webkit_pseudo_element()) {
-                        return true;
-                    }
-                }
+                auto const& selector_list = simple_selector.pseudo_class().argument_selector_list;
+                if (selector_list.contains([](auto const& s) { return s->contains_unknown_webkit_pseudo_element(); }))
+                    return true;
             }
             if (simple_selector.type == SimpleSelector::Type::PseudoElement && simple_selector.pseudo_element().type() == PseudoElement::UnknownWebKit)
                 return true;
@@ -688,6 +952,7 @@ Optional<Selector::CompoundSelector> Selector::CompoundSelector::absolutized(Sel
 
     return CompoundSelector {
         .combinator = this->combinator,
+        .is_implicit_universal_anchor = this->is_implicit_universal_anchor,
         .simple_selectors = absolutized_simple_selectors,
     };
 }
@@ -784,7 +1049,7 @@ size_t Selector::sibling_invalidation_distance() const
     m_sibling_invalidation_distance = 0;
     size_t current_distance = 0;
     for (auto const& compound_selector : compound_selectors()) {
-        if (compound_selector.combinator == Combinator::None)
+        if (compound_selector.combinator == Combinator::None || compound_selector.combinator == Combinator::PseudoElement)
             continue;
 
         if (compound_selector.combinator == Combinator::SubsequentSibling) {
@@ -806,7 +1071,7 @@ size_t Selector::sibling_invalidation_distance() const
     return *m_sibling_invalidation_distance;
 }
 
-SelectorList adapt_nested_relative_selector_list(SelectorList const& selectors)
+SelectorList adapt_nested_relative_selector_list(SelectorList const& selectors, StyleNestingParent style_nesting_parent)
 {
     // "Nested style rules differ from non-nested rules in the following ways:
     // - A nested style rule accepts a <relative-selector-list> as its prelude (rather than just a <selector-list>).
@@ -816,29 +1081,95 @@ SelectorList adapt_nested_relative_selector_list(SelectorList const& selectors)
     // https://drafts.csswg.org/css-nesting-1/#syntax
     // NOTE: We already parsed the selectors as a <relative-selector-list>
 
-    // Nested relative selectors get a `&` inserted at the beginning.
-    // This is, handily, how the spec wants them serialized:
-    // "When serializing a relative selector in a nested style rule, the selector must be absolutized,
-    // with the implied nesting selector inserted."
-    // - https://drafts.csswg.org/css-nesting-1/#cssom
-
-    CSS::SelectorList new_list;
+    SelectorList new_list;
     new_list.ensure_capacity(selectors.size());
     for (auto const& selector : selectors) {
         auto first_combinator = selector->compound_selectors().first().combinator;
-        if (!first_is_one_of(first_combinator, CSS::Selector::Combinator::None, CSS::Selector::Combinator::Descendant)
-            || !selector->contains_the_nesting_selector()) {
-            new_list.append(selector->relative_to(CSS::Selector::SimpleSelector { .type = CSS::Selector::SimpleSelector::Type::Nesting }));
-        } else if (first_combinator == CSS::Selector::Combinator::Descendant) {
+
+        // Nested relative selectors get a `&` inserted at the beginning.
+        // This is, handily, how the spec wants them serialized:
+        // "When serializing a relative selector in a nested style rule, the selector must be absolutized, with the
+        // implied nesting selector inserted."
+        // - https://drafts.csswg.org/css-nesting-1/#cssom
+        // However, if we are directly inside a @scope rule and contain `:scope`, then we do not insert the `&`.
+        bool insert_leading_ampersand = !first_is_one_of(first_combinator, Selector::Combinator::None, Selector::Combinator::Descendant);
+        if (!selector->contains_the_nesting_selector() && style_nesting_parent != StyleNestingParent::Scope)
+            insert_leading_ampersand = true;
+
+        if (insert_leading_ampersand) {
+            new_list.append(selector->relative_to(Selector::SimpleSelector { .type = Selector::SimpleSelector::Type::Nesting }));
+        } else if (first_combinator == Selector::Combinator::Descendant) {
             // Replace leading descendant combinator (whitespace) with none, because we're not actually relative.
             auto copied_compound_selectors = selector->compound_selectors();
-            copied_compound_selectors.first().combinator = CSS::Selector::Combinator::None;
-            new_list.append(CSS::Selector::create(move(copied_compound_selectors)));
+            copied_compound_selectors.first().combinator = Selector::Combinator::None;
+            new_list.append(Selector::create(move(copied_compound_selectors)));
         } else {
             new_list.append(selector);
         }
     }
     return new_list;
+}
+
+SelectorList absolutize_selectors_relative_to(SelectorList const& selectors, GC::Ptr<CSSRule const> parent)
+{
+    // NB: We use `:where(:scope)` to avoid adding specificity.
+    static NeverDestroyed<Selector::SimpleSelector> where_scope_selector { Selector::SimpleSelector {
+        .type = Selector::SimpleSelector::Type::PseudoClass,
+        .value = Selector::SimpleSelector::PseudoClassSelector {
+            .type = PseudoClass::Where,
+            .argument_selector_list = {
+                Selector::create({
+                    Selector::CompoundSelector {
+                        .combinator = Selector::Combinator::None,
+                        .simple_selectors = {
+                            Selector::SimpleSelector {
+                                .type = Selector::SimpleSelector::Type::PseudoClass,
+                                .value = Selector::SimpleSelector::PseudoClassSelector {
+                                    .type = PseudoClass::Scope,
+                                },
+                            },
+                        },
+                    },
+                }),
+            },
+        },
+    } };
+
+    // Replace all occurrences of `&` with the nearest ancestor style rule's selector list wrapped in `:is(...)`,
+    // or if we have no such ancestor, with `:scope`.
+
+    // If we don't have any nesting selectors, we can just use our selectors as they are.
+    if (!any_of(selectors, [](auto const& selector) { return selector->contains_the_nesting_selector(); }))
+        return selectors;
+
+    // Otherwise, build up a new list of selectors with the `&` replaced.
+
+    // First, figure out what we should replace `&` with.
+    // "When used in the selector of a nested style rule, the nesting selector represents the elements matched by the
+    // parent rule. When used in any other context, it represents the same elements as :scope in that context (unless
+    // otherwise defined)."
+    // https://drafts.csswg.org/css-nesting-1/#nest-selector
+    auto parent_selector = [&] -> Selector::SimpleSelector {
+        if (auto const* parent_style_rule = as_if<CSSStyleRule const>(parent.ptr())) {
+            // TODO: If there's only 1, we don't have to use `:is()` for it
+            return Selector::SimpleSelector {
+                .type = Selector::SimpleSelector::Type::PseudoClass,
+                .value = Selector::SimpleSelector::PseudoClassSelector {
+                    .type = PseudoClass::Is,
+                    .argument_selector_list = parent_style_rule->absolutized_selectors(),
+                },
+            };
+        }
+
+        return *where_scope_selector;
+    }();
+
+    SelectorList absolutized_selectors;
+    for (auto const& selector : selectors) {
+        if (auto absolutized = selector->absolutized(parent_selector))
+            absolutized_selectors.append(absolutized.release_nonnull());
+    }
+    return absolutized_selectors;
 }
 
 // https://drafts.csswg.org/css-syntax-3/#anb-microsyntax
@@ -864,9 +1195,10 @@ bool Selector::SimpleSelector::ANPlusBPattern::matches(int index) const
     if (step_size < 0 && offset < 0)
         return false;
 
-    // Like "a % b", but handles negative integers correctly.
-    auto const canonical_modulo = [](int a, int b) -> int {
-        int c = a % b;
+    // Like "a % b", but handles negative integers correctly. Done in 64 bits because "index - offset" and "-step_size"
+    // overflow a 32-bit int for an extreme An+B value such as :nth-child(2n-2147483648).
+    auto const canonical_modulo = [](i64 a, i64 b) -> i64 {
+        i64 c = a % b;
         if ((c < 0 && b > 0) || (c > 0 && b < 0)) {
             c += b;
         }
@@ -875,10 +1207,10 @@ bool Selector::SimpleSelector::ANPlusBPattern::matches(int index) const
 
     // When "step_size < 0", we start at "offset" and count backwards.
     if (step_size < 0)
-        return index <= offset && canonical_modulo(index - offset, -step_size) == 0;
+        return index <= offset && canonical_modulo(static_cast<i64>(index) - offset, -static_cast<i64>(step_size)) == 0;
 
     // Otherwise, we start at "offset" and count forwards.
-    return index >= offset && canonical_modulo(index - offset, step_size) == 0;
+    return index >= offset && canonical_modulo(static_cast<i64>(index) - offset, step_size) == 0;
 }
 
 // https://drafts.csswg.org/css-syntax-3/#serializing-anb

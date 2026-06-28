@@ -6,7 +6,9 @@
 
 #pragma once
 
-#include <LibWeb/CSS/Parser/Parser.h>
+#include <AK/Span.h>
+#include <AK/String.h>
+#include <LibWeb/Forward.h>
 
 namespace Web::CSS::Parser {
 
@@ -31,25 +33,41 @@ class GuardedSubstitutionContexts {
 public:
     void guard(SubstitutionContext&);
     void unguard(SubstitutionContext const&);
+    bool mark_existing_as_cyclic(SubstitutionContext const&);
 
 private:
     Vector<SubstitutionContext&> m_contexts;
 };
 
+struct ArbitrarySubstitutionReplacementContext {
+    ComputedProperties const* computed_style_for_custom_property_resolution { nullptr };
+};
+
 enum class ArbitrarySubstitutionFunction : u8 {
     Attr,
     Env,
+    If,
+    Inherit,
     Var,
 };
 [[nodiscard]] Optional<ArbitrarySubstitutionFunction> to_arbitrary_substitution_function(FlyString const& name);
 
-bool contains_guaranteed_invalid_value(Vector<ComponentValue> const&);
+bool contains_guaranteed_invalid_value(ReadonlySpan<ComponentValue>);
 
-[[nodiscard]] Vector<ComponentValue> substitute_arbitrary_substitution_functions(DOM::AbstractElement&, GuardedSubstitutionContexts&, Vector<ComponentValue> const&, Optional<SubstitutionContext> = {});
+[[nodiscard]] Vector<ComponentValue> substitute_arbitrary_substitution_functions(DOM::AbstractElement&, GuardedSubstitutionContexts&, ArbitrarySubstitutionReplacementContext const&, ReadonlySpan<ComponentValue>, Optional<SubstitutionContext> = {});
 
-using ArbitrarySubstitutionFunctionArguments = Vector<Vector<ComponentValue>>;
-[[nodiscard]] Optional<ArbitrarySubstitutionFunctionArguments> parse_according_to_argument_grammar(ArbitrarySubstitutionFunction, Vector<ComponentValue> const&);
+using DeclarationValueList = Vector<ReadonlySpan<ComponentValue>>;
 
-[[nodiscard]] Vector<ComponentValue> replace_an_arbitrary_substitution_function(DOM::AbstractElement&, GuardedSubstitutionContexts&, ArbitrarySubstitutionFunction, ArbitrarySubstitutionFunctionArguments const&);
+struct IfArgsBranch {
+    ReadonlySpan<ComponentValue> condition;
+    Optional<ReadonlySpan<ComponentValue>> value;
+};
+
+using IfArgs = Vector<IfArgsBranch>;
+using ArbitrarySubstitutionFunctionArguments = Variant<DeclarationValueList, IfArgs>;
+// The returned argument spans borrow from the input component value list.
+[[nodiscard]] Optional<ArbitrarySubstitutionFunctionArguments> parse_according_to_argument_grammar(ArbitrarySubstitutionFunction, ReadonlySpan<ComponentValue>);
+
+[[nodiscard]] Vector<ComponentValue> replace_an_arbitrary_substitution_function(DOM::AbstractElement&, GuardedSubstitutionContexts&, ArbitrarySubstitutionReplacementContext const&, ArbitrarySubstitutionFunction, ArbitrarySubstitutionFunctionArguments const&);
 
 }

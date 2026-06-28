@@ -5,7 +5,7 @@
  */
 
 #include "CSSMathMin.h"
-#include <LibWeb/Bindings/CSSMathMinPrototype.h>
+#include <LibWeb/Bindings/CSSMathMin.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSMathNegate.h>
 #include <LibWeb/CSS/CSSNumericArray.h>
@@ -23,28 +23,11 @@ GC::Ref<CSSMathMin> CSSMathMin::create(JS::Realm& realm, NumericType type, GC::R
     return realm.create<CSSMathMin>(realm, move(type), move(values));
 }
 
-// https://drafts.css-houdini.org/css-typed-om-1/#dom-cssmathmin-cssmathmin
-WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::construct_impl(JS::Realm& realm, Vector<CSSNumberish> values)
+WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::add_all_types_into_math_min(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>> const& values)
 {
-    // The CSSMathMin(...args) and CSSMathMax(...args) constructors are defined identically to the above, except that
-    // in the last step they return a new CSSMathMin or CSSMathMax object, respectively.
-    // NB: So, the steps below are a modification of the CSSMathSum steps.
-
-    // 1. Replace each item of args with the result of rectifying a numberish value for the item.
-    GC::RootVector<GC::Ref<CSSNumericValue>> converted_values { realm.heap() };
-    converted_values.ensure_capacity(values.size());
-    for (auto const& value : values) {
-        converted_values.append(rectify_a_numberish_value(realm, value));
-    }
-
-    // 2. If args is empty, throw a SyntaxError.
-    if (converted_values.is_empty())
-        return WebIDL::SyntaxError::create(realm, "Cannot create an empty CSSMathMin"_utf16);
-
-    // 3. Let type be the result of adding the types of all the items of args. If type is failure, throw a TypeError.
-    auto type = converted_values.first()->type();
+    auto type = values.first()->type();
     bool first = true;
-    for (auto const& value : converted_values) {
+    for (auto const& value : values) {
         if (first) {
             first = false;
             continue;
@@ -56,9 +39,31 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::construct_impl(JS::Realm& r
         }
     }
 
+    auto values_array = CSSNumericArray::create(realm, { values });
+    return CSSMathMin::create(realm, type, values_array);
+}
+
+// https://drafts.css-houdini.org/css-typed-om-1/#dom-cssmathmin-cssmathmin
+WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::construct_impl(JS::Realm& realm, ReadonlySpan<CSSNumberish> values)
+{
+    // The CSSMathMin(...args) and CSSMathMax(...args) constructors are defined identically to the above, except that
+    // in the last step they return a new CSSMathMin or CSSMathMax object, respectively.
+    // NB: So, the steps below are a modification of the CSSMathSum steps.
+
+    // 1. Replace each item of args with the result of rectifying a numberish value for the item.
+    GC::RootVector<GC::Ref<CSSNumericValue>> converted_values;
+    converted_values.ensure_capacity(values.size());
+    for (auto const& value : values) {
+        converted_values.append(rectify_a_numberish_value(realm, value));
+    }
+
+    // 2. If args is empty, throw a SyntaxError.
+    if (converted_values.is_empty())
+        return WebIDL::SyntaxError::create(realm, "Cannot create an empty CSSMathMin"_utf16);
+
+    // 3. Let type be the result of adding the types of all the items of args. If type is failure, throw a TypeError.
     // 4. Return a new CSSMathMin whose values internal slot is set to args.
-    auto values_array = CSSNumericArray::create(realm, { converted_values });
-    return CSSMathMin::create(realm, move(type), move(values_array));
+    return CSSMathMin::add_all_types_into_math_min(realm, converted_values);
 }
 
 CSSMathMin::CSSMathMin(JS::Realm& realm, NumericType type, GC::Ref<CSSNumericArray> values)
@@ -82,16 +87,15 @@ void CSSMathMin::visit_edges(Visitor& visitor)
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#serialize-a-cssmathvalue
-String CSSMathMin::serialize_math_value(Nested, Parens) const
+void CSSMathMin::serialize_math_value(Utf16StringBuilder& s, Nested, Parens) const
 {
     // NB: Only steps 1 and 2 apply here.
     // 1. Let s initially be the empty string.
-    StringBuilder s;
 
     // 2. If this is a CSSMathMin or CSSMathMax:
     {
         // 1. Append "min(" or "max(" to s, as appropriate.
-        s.append("min("sv);
+        s.append_ascii("min("sv);
 
         // 2. For each arg in this’s values internal slot, serialize arg with nested and paren-less both true, and
         //    append the result to s, appending a ", " between successive values.
@@ -100,14 +104,13 @@ String CSSMathMin::serialize_math_value(Nested, Parens) const
             if (first) {
                 first = false;
             } else {
-                s.append(", "sv);
+                s.append_ascii(", "sv);
             }
-            s.append(arg->to_string({ .nested = true, .parenless = true }));
+            arg->serialize(s, { .nested = true, .parenless = true });
         }
 
         // 3. Append ")" to s and return s.
-        s.append(")"sv);
-        return s.to_string_without_validation();
+        s.append_ascii(')');
     }
 }
 

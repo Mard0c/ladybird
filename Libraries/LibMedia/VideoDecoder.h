@@ -8,7 +8,9 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
 #include <AK/Time.h>
+#include <LibMedia/Color/CodingIndependentCodePoints.h>
 
 #include "DecoderError.h"
 
@@ -18,10 +20,10 @@ class VideoDecoder {
 public:
     virtual ~VideoDecoder() { }
 
-    virtual DecoderErrorOr<void> receive_coded_data(AK::Duration timestamp, ReadonlyBytes coded_data) = 0;
-    DecoderErrorOr<void> receive_coded_data(AK::Duration timestamp, ByteBuffer const& coded_data) { return receive_coded_data(timestamp, coded_data.span()); }
+    virtual DecoderErrorOr<void> receive_coded_data(AK::Duration timestamp, AK::Duration duration, ReadonlyBytes coded_data) = 0;
+    DecoderErrorOr<void> receive_coded_data(AK::Duration timestamp, AK::Duration duration, ByteBuffer const& coded_data) { return receive_coded_data(timestamp, duration, coded_data.span()); }
     virtual void signal_end_of_stream() = 0;
-    virtual DecoderErrorOr<NonnullOwnPtr<VideoFrame>> get_decoded_frame() = 0;
+    virtual DecoderErrorOr<NonnullRefPtr<VideoFrame>> get_decoded_frame(CodingIndependentCodePoints const& container_cicp) = 0;
 
     virtual void flush() = 0;
 };

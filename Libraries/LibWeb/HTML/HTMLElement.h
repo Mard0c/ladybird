@@ -7,11 +7,13 @@
 #pragma once
 
 #include <AK/Optional.h>
+#include <LibWeb/Bindings/HTMLElement.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/GlobalEventHandlers.h>
-#include <LibWeb/HTML/HTMLOrSVGElement.h>
+#include <LibWeb/HTML/HTMLOrSVGOrMathMLElement.h>
 #include <LibWeb/HTML/ToggleTaskTracker.h>
 #include <LibWeb/HTML/TokenizedFeatures.h>
 
@@ -31,15 +33,7 @@ enum class ContentEditableState : u8 {
     Inherit,
 };
 
-struct ShowPopoverOptions {
-    GC::Ptr<HTMLElement> source;
-};
-
-struct TogglePopoverOptions : public ShowPopoverOptions {
-    Optional<bool> force {};
-};
-
-using TogglePopoverOptionsOrForceBoolean = Variant<TogglePopoverOptions, bool>;
+using TogglePopoverOptionsOrForceBoolean = Variant<Bindings::TogglePopoverOptions, bool>;
 
 enum class ThrowExceptions {
     Yes,
@@ -74,7 +68,8 @@ enum class IsPopover {
 class WEB_API HTMLElement
     : public DOM::Element
     , public HTML::GlobalEventHandlers
-    , public HTML::HTMLOrSVGElement<HTMLElement> {
+    , public HTML::HTMLOrSVGOrMathMLElement<HTMLElement>
+    , public FormAssociatedElement {
     WEB_PLATFORM_OBJECT(HTMLElement, DOM::Element);
     GC_DECLARE_ALLOCATOR(HTMLElement);
 
@@ -108,10 +103,8 @@ public:
     GC::Ptr<Element> offset_parent() const;
     GC::Ptr<Element> scroll_parent() const;
 
-    bool cannot_navigate() const;
-
-    Variant<bool, double, String> hidden() const;
-    void set_hidden(Variant<bool, double, String> const&);
+    Variant<bool, double, String, Empty> hidden() const;
+    void set_hidden(Variant<bool, double, String, Empty> const&);
 
     void click();
 
@@ -147,14 +140,11 @@ public:
     bool fire_a_synthetic_pointer_event(FlyString const& type, DOM::Element& target, bool not_trusted);
 
     // https://html.spec.whatwg.org/multipage/forms.html#category-label
-    virtual bool is_labelable() const { return false; }
+    virtual bool is_labelable() const { return is_form_associated_custom_element(); }
 
     GC::Ptr<DOM::NodeList> labels();
 
     virtual Optional<ARIA::Role> default_role() const override;
-
-    String get_an_elements_target(Optional<String> target = {}) const;
-    TokenizedFeature::NoOpener get_an_elements_noopener(URL::URL const& url, StringView target) const;
 
     WebIDL::ExceptionOr<GC::Ref<ElementInternals>> attach_internals();
 
@@ -162,7 +152,8 @@ public:
     Optional<String> popover() const;
     Optional<String> opened_in_popover_mode() const { return m_opened_in_popover_mode; }
 
-    virtual void removed_from(Node* old_parent, Node& old_root) override;
+    virtual void removed_from(IsSubtreeRoot, Node* old_ancestor, Node& old_root) override;
+    virtual void moved_from(IsSubtreeRoot, GC::Ptr<DOM::Node> old_ancestor) override;
 
     enum class PopoverVisibilityState : u8 {
         Hidden,
@@ -170,16 +161,16 @@ public:
     };
     PopoverVisibilityState popover_visibility_state() const { return m_popover_visibility_state; }
 
-    WebIDL::ExceptionOr<void> show_popover_for_bindings(ShowPopoverOptions const& = {});
+    WebIDL::ExceptionOr<void> show_popover_for_bindings(Bindings::ShowPopoverOptions const& = {});
     WebIDL::ExceptionOr<void> hide_popover_for_bindings();
     WebIDL::ExceptionOr<bool> toggle_popover(TogglePopoverOptionsOrForceBoolean const&);
 
     WebIDL::ExceptionOr<bool> check_popover_validity(ExpectedToBeShowing expected_to_be_showing, ThrowExceptions throw_exceptions, GC::Ptr<DOM::Document>, IgnoreDomState ignore_dom_state);
-    WebIDL::ExceptionOr<void> show_popover(ThrowExceptions throw_exceptions, GC::Ptr<HTMLElement> invoker);
+    WebIDL::ExceptionOr<void> show_popover(ThrowExceptions throw_exceptions, GC::Ptr<HTMLElement> source);
     WebIDL::ExceptionOr<void> hide_popover(FocusPreviousElement focus_previous_element, FireEvents fire_events, ThrowExceptions throw_exceptions, IgnoreDomState ignore_dom_state, GC::Ptr<HTMLElement> source);
 
     static void hide_all_popovers_until(Variant<GC::Ptr<HTMLElement>, GC::Ptr<DOM::Document>> endpoint, FocusPreviousElement focus_previous_element, FireEvents fire_events);
-    static GC::Ptr<HTMLElement> topmost_popover_ancestor(GC::Ptr<DOM::Node> new_popover_or_top_layer_element, Vector<GC::Ref<HTMLElement>> const& popover_list, GC::Ptr<HTMLElement> invoker, IsPopover is_popover);
+    static GC::Ptr<HTMLElement> topmost_popover_ancestor(GC::Ptr<DOM::Node> new_popover_or_top_layer_element, Vector<GC::Ref<HTMLElement>> const& popover_list, GC::Ptr<HTMLElement> source, IsPopover is_popover);
 
     static void light_dismiss_open_popovers(UIEvents::PointerEvent const&, GC::Ptr<DOM::Node>);
 
@@ -188,13 +179,16 @@ public:
     bool draggable() const;
     void set_draggable(bool draggable);
 
-    virtual bool is_valid_invoker_command(String&) { return false; }
-    virtual void invoker_command_steps(DOM::Element&, String&) { }
+    virtual bool is_valid_command(String&) { return false; }
+    virtual void command_steps(DOM::Element&, String&) { }
 
-    bool is_form_associated_custom_element();
+    bool is_form_associated_custom_element() const;
 
     // https://html.spec.whatwg.org/multipage/rendering.html#button-layout
     virtual bool uses_button_layout() const { return false; }
+
+    WebIDL::UnsignedLong computed_heading_level() const;
+    WebIDL::UnsignedLong computed_heading_offset() const;
 
 protected:
     HTMLElement(DOM::Document&, DOM::QualifiedName);
@@ -207,24 +201,18 @@ protected:
 
     virtual void visit_edges(Cell::Visitor&) override;
 
-    // https://html.spec.whatwg.org/multipage/dom.html#block-rendering
-    void block_rendering();
-    // https://html.spec.whatwg.org/multipage/dom.html#unblock-rendering
-    void unblock_rendering();
-    // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#potentially-render-blocking
-    bool is_potentially_render_blocking();
-    // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#implicitly-potentially-render-blocking
-    virtual bool is_implicitly_potentially_render_blocking() const { return false; }
-
     void set_inert(bool inert) { m_inert = inert; }
     void set_subtree_inertness(bool is_inert);
 
     [[nodiscard]] Utf16String get_the_text_steps();
 
+    virtual void adjust_computed_style(CSS::ComputedProperties::Builder&) override;
+
 private:
     virtual bool is_html_element() const final { return true; }
 
-    virtual void adjust_computed_style(CSS::ComputedProperties&) override;
+    // ^FormAssociatedElement
+    virtual HTMLElement& form_associated_element_to_html_element() override { return *this; }
 
     // ^HTML::GlobalEventHandlers
     virtual GC::Ptr<DOM::EventTarget> global_event_handlers_to_event_target(FlyString const&) override { return *this; }
@@ -240,7 +228,7 @@ private:
     static Optional<String> popover_value_to_state(Optional<String> value);
     void hide_popover_stack_until(Vector<GC::Ref<HTMLElement>> const& popover_list, FocusPreviousElement focus_previous_element, FireEvents fire_events);
     GC::Ptr<HTMLElement> nearest_inclusive_open_popover();
-    GC::Ptr<HTMLElement> nearest_inclusive_target_popover_for_invoker();
+    GC::Ptr<HTMLElement> nearest_inclusive_target_popover();
     static void close_entire_popover_list(Vector<GC::Ref<HTMLElement>> const& popover_list, FocusPreviousElement focus_previous_element, FireEvents fire_events);
     static GC::Ptr<HTMLElement> topmost_clicked_popover(GC::Ptr<DOM::Node> node);
     size_t popover_stack_position();
@@ -264,8 +252,8 @@ private:
     // https://html.spec.whatwg.org/multipage/popover.html#popover-showing-or-hiding
     bool m_popover_showing_or_hiding { false };
 
-    // https://html.spec.whatwg.org/multipage/popover.html#popover-invoker
-    GC::Ptr<HTMLElement> m_popover_invoker;
+    // https://html.spec.whatwg.org/multipage/popover.html#popover-trigger
+    GC::Ptr<HTMLElement> m_popover_trigger;
 
     // https://html.spec.whatwg.org/multipage/popover.html#the-popover-attribute:toggle-task-tracker
     Optional<ToggleTaskTracker> m_popover_toggle_task_tracker;
@@ -282,5 +270,15 @@ namespace Web::DOM {
 
 template<>
 inline bool Node::fast_is<HTML::HTMLElement>() const { return is_html_element(); }
+
+}
+
+namespace JS {
+
+template<>
+inline bool Object::fast_is<Web::HTML::HTMLElement>() const
+{
+    return is_dom_node() && static_cast<Web::DOM::Node const&>(*this).is_html_element();
+}
 
 }

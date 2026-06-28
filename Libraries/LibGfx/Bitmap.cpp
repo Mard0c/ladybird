@@ -31,14 +31,26 @@ struct BackingStore {
     size_t size_in_bytes { 0 };
 };
 
+StringView bitmap_format_name(BitmapFormat format)
+{
+    switch (format) {
+#define ENUMERATE_BITMAP_FORMAT(format) \
+    case BitmapFormat::format:          \
+        return #format##sv;
+        ENUMERATE_BITMAP_FORMATS(ENUMERATE_BITMAP_FORMAT)
+#undef ENUMERATE_BITMAP_FORMAT
+    }
+    VERIFY_NOT_REACHED();
+}
+
 size_t Bitmap::minimum_pitch(size_t width, BitmapFormat format)
 {
     size_t element_size;
-    switch (determine_storage_format(format)) {
-    case StorageFormat::BGRx8888:
-    case StorageFormat::BGRA8888:
-    case StorageFormat::RGBx8888:
-    case StorageFormat::RGBA8888:
+    switch (format) {
+    case BitmapFormat::BGRx8888:
+    case BitmapFormat::BGRA8888:
+    case BitmapFormat::RGBx8888:
+    case BitmapFormat::RGBA8888:
         element_size = 4;
         break;
     default:
@@ -52,12 +64,12 @@ static bool size_would_overflow(BitmapFormat format, IntSize size)
 {
     if (size.width() < 0 || size.height() < 0)
         return true;
-    // This check is a bit arbitrary, but should protect us from most shenanigans:
-    if (size.width() >= INT16_MAX || size.height() >= INT16_MAX)
+
+    if (size.width() > UINT16_MAX || size.height() > UINT16_MAX)
         return true;
-    // In contrast, this check is absolutely necessary:
+
     size_t pitch = Bitmap::minimum_pitch(size.width(), format);
-    return Checked<size_t>::multiplication_would_overflow(pitch, size.height());
+    return Checked<int32_t>::multiplication_would_overflow(pitch, size.height());
 }
 
 ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create(BitmapFormat format, IntSize size)
@@ -96,8 +108,8 @@ Bitmap::Bitmap(BitmapFormat format, AlphaType alpha_type, IntSize size, BackingS
     VERIFY(!size_would_overflow(format, size));
     VERIFY(m_data);
     VERIFY(backing_store.size_in_bytes == size_in_bytes());
-    m_destruction_callback = [data = m_data, size_in_bytes = this->size_in_bytes()] {
-        kfree_sized(data, size_in_bytes);
+    m_destruction_callback = [data = m_data] {
+        kfree(data);
     };
 }
 
@@ -126,6 +138,9 @@ ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_with_anonymous_buffer(BitmapFormat
     if (size_would_overflow(format, size))
         return Error::from_string_literal("Gfx::Bitmap::create_with_anonymous_buffer size overflow");
 
+    if (buffer.size() < size_in_bytes(minimum_pitch(size.width(), format), size.height()))
+        return Error::from_string_literal("Gfx::Bitmap::create_with_anonymous_buffer buffer too small for size");
+
     return adopt_nonnull_ref_or_enomem(new (nothrow) Bitmap(format, alpha_type, move(buffer), size));
 }
 
@@ -133,6 +148,9 @@ ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_with_raw_data(BitmapFormat format,
 {
     if (size_would_overflow(format, size))
         return Error::from_string_literal("Gfx::Bitmap::create_with_raw_data size overflow");
+
+    if (raw_data.size() < size_in_bytes(minimum_pitch(size.width(), format), size.height()))
+        return Error::from_string_literal("Gfx::Bitmap::create_with_raw_data data too small for size");
 
     auto backing_store = TRY(Bitmap::allocate_backing_store(format, size, InitializeBackingStore::No));
     raw_data.copy_to(Bytes { backing_store.data, backing_store.size_in_bytes });
@@ -158,25 +176,6 @@ ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::clone() const
     memcpy(new_bitmap->scanline(0), scanline(0), size_in_bytes());
 
     return new_bitmap;
-}
-
-void Bitmap::apply_mask(Gfx::Bitmap const& mask, MaskKind mask_kind)
-{
-    VERIFY(size() == mask.size());
-
-    for (int y = 0; y < height(); y++) {
-        for (int x = 0; x < width(); x++) {
-            auto color = get_pixel(x, y);
-            auto mask_color = mask.get_pixel(x, y);
-            if (mask_kind == MaskKind::Luminance) {
-                color = color.with_alpha(color.alpha() * mask_color.alpha() * mask_color.luminosity() / (255 * 255));
-            } else {
-                VERIFY(mask_kind == MaskKind::Alpha);
-                color = color.with_alpha(color.alpha() * mask_color.alpha() / 255);
-            }
-            set_pixel(x, y, color);
-        }
-    }
 }
 
 ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::cropped(Gfx::IntRect crop, Gfx::Color outside_color) const
@@ -241,7 +240,7 @@ Bitmap::~Bitmap()
 void Bitmap::strip_alpha_channel()
 {
     VERIFY(m_format == BitmapFormat::BGRA8888 || m_format == BitmapFormat::BGRx8888);
-    for (ARGB32& pixel : *this)
+    for (BGRA8888& pixel : *this)
         pixel = 0xff000000 | (pixel & 0xffffff);
     m_format = BitmapFormat::BGRx8888;
 }

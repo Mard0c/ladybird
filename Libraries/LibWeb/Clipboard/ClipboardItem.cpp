@@ -16,7 +16,7 @@ namespace Web::Clipboard {
 GC_DEFINE_ALLOCATOR(ClipboardItem);
 
 // https://w3c.github.io/clipboard-apis/#dom-clipboarditem-clipboarditem
-WebIDL::ExceptionOr<GC::Ref<ClipboardItem>> ClipboardItem::construct_impl(JS::Realm& realm, OrderedHashMap<String, GC::Root<WebIDL::Promise>> const& items, ClipboardItemOptions const& options)
+WebIDL::ExceptionOr<GC::Ref<ClipboardItem>> ClipboardItem::construct_impl(JS::Realm& realm, GC::OrderedRootHashMap<String, GC::Ref<WebIDL::Promise>> const& items, Bindings::ClipboardItemOptions const& options)
 {
     // 1. If items is empty, then throw a TypeError.
     if (items.is_empty())
@@ -144,7 +144,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> ClipboardItem::get_type(String con
                     // 1. If v is a DOMString, then follow the below steps:
                     if (value.is_string()) {
                         // 1. Let dataAsBytes be the result of UTF-8 encoding v.
-                        auto utf8_string = value.as_string().utf8_string();
+                        auto utf8_string = value.as_string().utf16_string_view().to_utf8_but_should_be_ported_to_utf16();
                         auto data_as_bytes = MUST(ByteBuffer::copy(utf8_string.bytes()));
 
                         // 2. Let blobData be a Blob created using dataAsBytes with its type set to mimeType, serialized.
@@ -154,7 +154,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> ClipboardItem::get_type(String con
                         WebIDL::resolve_promise(realm, promise, blob_data);
                     }
                     // 2. If v is a Blob, then follow the below steps:
-                    if (value.is_object() && is<FileAPI::Blob>(value.as_object())) {
+                    if (value.is<FileAPI::Blob>()) {
                         // 1. Resolve p with v.
                         WebIDL::resolve_promise(realm, promise, value);
                     }

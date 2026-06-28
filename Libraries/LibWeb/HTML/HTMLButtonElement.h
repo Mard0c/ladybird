@@ -7,9 +7,8 @@
 #pragma once
 
 #include <LibWeb/ARIA/Roles.h>
-#include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
-#include <LibWeb/HTML/PopoverInvokerElement.h>
+#include <LibWeb/HTML/PopoverTargetAttributes.h>
 
 namespace Web::HTML {
 
@@ -21,17 +20,15 @@ namespace Web::HTML {
 
 class HTMLButtonElement final
     : public HTMLElement
-    , public FormAssociatedElement
-    , public PopoverInvokerElement {
+    , public PopoverTargetAttributes {
     WEB_PLATFORM_OBJECT(HTMLButtonElement, HTMLElement);
     GC_DECLARE_ALLOCATOR(HTMLButtonElement);
-    FORM_ASSOCIATED_ELEMENT(HTMLElement, HTMLButtonElement)
 
 public:
     virtual ~HTMLButtonElement() override;
 
     virtual void initialize(JS::Realm&) override;
-    virtual void adjust_computed_style(CSS::ComputedProperties&) override;
+    virtual void adjust_computed_style(CSS::ComputedProperties::Builder&) override;
 
     enum class TypeAttributeState {
 #define __ENUMERATE_HTML_BUTTON_TYPE_ATTRIBUTE(_, state) state,
@@ -50,6 +47,9 @@ public:
     // https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
     // https://html.spec.whatwg.org/multipage/semantics-other.html#concept-element-disabled
     virtual bool is_focusable() const override;
+
+    // ^FormAssociatedElement
+    virtual bool is_form_associated_element() const override { return true; }
 
     // ^FormAssociatedElement
     // https://html.spec.whatwg.org/multipage/forms.html#category-listed
@@ -74,7 +74,8 @@ public:
     // https://www.w3.org/TR/html-aria/#el-button
     virtual Optional<ARIA::Role> default_role() const override { return ARIA::Role::button; }
 
-    virtual Utf16String value() const override;
+    Utf16String value() const;
+    virtual Utf16String form_value() const override { return value(); }
     virtual Optional<String> optional_value() const override;
 
     virtual bool has_activation_behavior() const override;

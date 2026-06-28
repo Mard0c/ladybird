@@ -7,7 +7,7 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/HTML/Navigable.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/Window.h>
 
@@ -88,13 +88,6 @@ GC::Ptr<DOM::Document> WindowEnvironmentSettingsObject::responsible_document()
 {
     // Return window's associated Document.
     return m_window->associated_document();
-}
-
-// https://html.spec.whatwg.org/multipage/window-object.html#script-settings-for-window-objects:api-url-character-encoding
-String WindowEnvironmentSettingsObject::api_url_character_encoding() const
-{
-    // Return the current character encoding of window's associated Document.
-    return m_window->associated_document().encoding_or_default();
 }
 
 // https://html.spec.whatwg.org/multipage/window-object.html#script-settings-for-window-objects:api-base-url

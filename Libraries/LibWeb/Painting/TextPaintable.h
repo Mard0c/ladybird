@@ -12,18 +12,11 @@
 namespace Web::Painting {
 
 class TextPaintable final : public Paintable {
-    GC_CELL(TextPaintable, Paintable);
-    GC_DECLARE_ALLOCATOR(TextPaintable);
-
 public:
-    static GC::Ref<TextPaintable> create(Layout::TextNode const&);
+    static NonnullRefPtr<TextPaintable> create(Layout::TextNode const&);
+    virtual StringView class_name() const override { return "TextPaintable"sv; }
 
     Layout::TextNode const& layout_node() const { return static_cast<Layout::TextNode const&>(Paintable::layout_node()); }
-
-    virtual bool wants_mouse_events() const override;
-    virtual DispatchEventOfSameName handle_mousedown(Badge<EventHandler>, CSSPixelPoint, unsigned button, unsigned modifiers) override;
-    virtual DispatchEventOfSameName handle_mouseup(Badge<EventHandler>, CSSPixelPoint, unsigned button, unsigned modifiers) override;
-    virtual DispatchEventOfSameName handle_mousemove(Badge<EventHandler>, CSSPixelPoint, unsigned button, unsigned modifiers) override;
 
 protected:
     virtual void paint_inspector_overlay_internal(DisplayListRecordingContext&) const override;

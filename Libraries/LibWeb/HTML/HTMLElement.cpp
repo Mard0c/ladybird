@@ -5,11 +5,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/StringBuilder.h>
+#include <AK/Utf16StringBuilder.h>
 #include <LibJS/Runtime/NativeFunction.h>
 #include <LibWeb/ARIA/Roles.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
-#include <LibWeb/Bindings/HTMLElementPrototype.h>
+#include <LibWeb/Bindings/HTMLElement.h>
+#include <LibWeb/Bindings/PointerEvent.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -23,6 +24,7 @@
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/CloseWatcher.h>
 #include <LibWeb/HTML/CustomElements/CustomElementDefinition.h>
+#include <LibWeb/HTML/CustomElements/CustomElementRegistry.h>
 #include <LibWeb/HTML/ElementInternals.h>
 #include <LibWeb/HTML/EventHandler.h>
 #include <LibWeb/HTML/HTMLAnchorElement.h>
@@ -31,17 +33,20 @@
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLDialogElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLLabelElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
 #include <LibWeb/HTML/HTMLParagraphElement.h>
-#include <LibWeb/HTML/PopoverInvokerElement.h>
+#include <LibWeb/HTML/Numbers.h>
+#include <LibWeb/HTML/PopoverTargetAttributes.h>
 #include <LibWeb/HTML/ToggleEvent.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/TextNode.h>
+#include <LibWeb/Layout/TextOffsetMapping.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Selection/Selection.h>
@@ -70,42 +75,12 @@ void HTMLElement::initialize(JS::Realm& realm)
 void HTMLElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    HTMLOrSVGElement::visit_edges(visitor);
+    HTMLOrSVGOrMathMLElement::visit_edges(visitor);
+    FormAssociatedElement::visit_edges(visitor);
     visitor.visit(m_labels);
     visitor.visit(m_attached_internals);
-    visitor.visit(m_popover_invoker);
+    visitor.visit(m_popover_trigger);
     visitor.visit(m_popover_close_watcher);
-}
-
-// https://html.spec.whatwg.org/multipage/dom.html#block-rendering
-void HTMLElement::block_rendering()
-{
-    // 1. Let document be el's node document.
-    auto& document = this->document();
-
-    // 2. If document allows adding render-blocking elements, then append el to document's render-blocking element set.
-    if (document.allows_adding_render_blocking_elements()) {
-        document.add_render_blocking_element(*this);
-    }
-}
-
-// https://html.spec.whatwg.org/multipage/dom.html#unblock-rendering
-void HTMLElement::unblock_rendering()
-{
-    // 1. Let document be el's node document.
-    auto& document = this->document();
-
-    // 2. Remove el from document's render-blocking element set.
-    document.remove_render_blocking_element(*this);
-}
-
-// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#potentially-render-blocking
-bool HTMLElement::is_potentially_render_blocking()
-{
-    // An element is potentially render-blocking if
-    // FIXME: its blocking tokens set contains "render",
-    // or if it is implicitly potentially render-blocking, which will be defined at the individual elements.
-    return is_implicitly_potentially_render_blocking();
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-translate
@@ -149,7 +124,8 @@ void HTMLElement::set_dir(String const& dir)
 
 bool HTMLElement::is_focusable() const
 {
-    return Base::is_focusable() || is_editing_host();
+    return (Base::is_focusable() || is_editing_host())
+        && meets_focusable_area_rendering_requirements();
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-iscontenteditable
@@ -248,7 +224,7 @@ WebIDL::ExceptionOr<void> HTMLElement::set_outer_text(Utf16View const& value)
         MUST(fragment->append_child(document().create_text_node({})));
 
     // 6. Replace this with fragment within this's parent.
-    MUST(parent()->replace_child(fragment, *this));
+    TRY(parent()->replace_child(fragment, *this));
 
     // 7. If next is non-null and next's previous sibling is a Text node, then merge with the next text node given next's previous sibling.
     if (next && is<DOM::Text>(next->previous_sibling()))
@@ -338,6 +314,8 @@ static Vector<Variant<Utf16String, RequiredLineBreakCount>> rendered_text_collec
     auto* layout_node = node.layout_node();
     if (!layout_node)
         return items;
+    if (!layout_node->has_style_or_parent_with_style())
+        return items;
 
     auto const& computed_values = layout_node->computed_values();
 
@@ -358,13 +336,16 @@ static Vector<Variant<Utf16String, RequiredLineBreakCount>> rendered_text_collec
     //    element. Soft hyphens should be preserved. [CSSTEXT]
 
     if (auto const* layout_text_node = as_if<Layout::TextNode>(layout_node)) {
-        Layout::TextNode::ChunkIterator iterator { *layout_text_node, false, false };
-        while (true) {
-            auto chunk = iterator.next();
-            if (!chunk.has_value())
-                break;
-            items.append(Utf16String::from_utf16(chunk.release_value().view));
-        }
+        Layout::TextOffsetMapping mapping { layout_text_node->dom_node() };
+        mapping.for_each_fragment([&](Layout::TextNode const& slice) {
+            Layout::TextNode::ChunkIterator iterator { slice, false, false };
+            while (true) {
+                auto chunk = iterator.next();
+                if (!chunk.has_value())
+                    break;
+                items.append(Utf16String::from_utf16(chunk.release_value().view));
+            }
+        });
         return items;
     }
 
@@ -437,7 +418,7 @@ Utf16String HTMLElement::get_the_text_steps()
 
     // 6. Replace each remaining run of consecutive required line break count items with a string consisting of as many
     //    U+000A LF code points as the maximum of the values in the required line break count items.
-    StringBuilder builder(StringBuilder::Mode::UTF16);
+    Utf16StringBuilder builder;
     for (size_t i = 0; i < results.size(); ++i) {
         results[i].visit(
             [&](Utf16String const& string) {
@@ -454,12 +435,12 @@ Utf16String HTMLElement::get_the_text_steps()
                 // Skip over the run of required line break counts.
                 i = j - 1;
 
-                builder.append_repeated('\n', max_line_breaks);
+                builder.append_repeated_ascii('\n', max_line_breaks);
             });
     }
 
     // 7. Return the concatenation of the string items in results.
-    return builder.to_utf16_string();
+    return builder.to_string();
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-innertext
@@ -476,22 +457,37 @@ Utf16String HTMLElement::outer_text()
     return get_the_text_steps();
 }
 
+static bool any_ancestor_establishes_a_fixed_position_containing_block(Layout::NodeWithStyle const& node)
+{
+    // https://www.w3.org/TR/css-position-3/#fixed-positioning-containing-block
+    // The containing block is established by the nearest ancestor box that establishes an fixed positioning containing
+    // block, with the bounds of the containing block determined identically to the absolute positioning containing block.
+    for (auto ancestor = node.containing_block(); ancestor; ancestor = ancestor->containing_block()) {
+        if (ancestor->establishes_a_fixed_positioning_containing_block())
+            return true;
+    }
+    return false;
+}
+
 // https://drafts.csswg.org/cssom-view/#dom-htmlelement-scrollparent
 GC::Ptr<DOM::Element> HTMLElement::scroll_parent() const
 {
     // NOTE: We have to ensure that the layout is up-to-date before querying the layout tree.
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementScrollParent);
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementScrollParent);
 
     // 1. If any of the following holds true, return null and terminate this algorithm:
     //    - The element does not have an associated box.
     //    - The element is the root element.
     //    - The element is the body element.
-    //    - FIXME: The element’s computed value of the position property is fixed and no ancestor establishes a fixed position containing block.
+    //    - The element’s computed value of the position property is fixed and no ancestor establishes a fixed position containing block.
     if (!layout_node())
         return nullptr;
     if (is_document_element())
         return nullptr;
     if (is_html_body_element())
+        return nullptr;
+    bool const no_ancestor_establishes_a_fixed_position_containing_block = !any_ancestor_establishes_a_fixed_position_containing_block(*layout_node());
+    if (layout_node()->is_fixed_position() && no_ancestor_establishes_a_fixed_position_containing_block)
         return nullptr;
 
     // 2. Let ancestor be the containing block of the element in the flat tree and repeat these substeps:
@@ -513,8 +509,10 @@ GC::Ptr<DOM::Element> HTMLElement::scroll_parent() const
             return const_cast<Element*>(static_cast<DOM::Element const*>(ancestor->dom_node()));
         }
 
-        // FIXME: 3. If the computed value of the position property of ancestor is fixed, and no ancestor establishes a fixed
+        // 3. If the computed value of the position property of ancestor is fixed, and no ancestor establishes a fixed
         //    position containing block, terminate this algorithm and return null.
+        if (ancestor->computed_values().position() == CSS::Positioning::Fixed && no_ancestor_establishes_a_fixed_position_containing_block)
+            return nullptr;
 
         // 4. Let ancestor be the containing block of ancestor in the flat tree.
         ancestor = ancestor->containing_block();
@@ -523,55 +521,69 @@ GC::Ptr<DOM::Element> HTMLElement::scroll_parent() const
     return nullptr;
 }
 
-// https://www.w3.org/TR/cssom-view-1/#dom-htmlelement-offsetparent
+// https://drafts.csswg.org/cssom-view-1/#dom-htmlelement-offsetparent
 GC::Ptr<DOM::Element> HTMLElement::offset_parent() const
 {
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementOffsetParent);
+    // NOTE: We have to ensure that the layout is up-to-date before querying the layout tree.
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementOffsetParent);
 
     // 1. If any of the following holds true return null and terminate this algorithm:
     //    - The element does not have an associated box.
     //    - The element is the root element.
     //    - The element is the HTML body element.
-    //    - The element’s computed value of the position property is fixed.
+    //    - The element’s computed value of the position property is fixed and no ancestor establishes a fixed position containing block.
     if (!layout_node())
         return nullptr;
     if (is_document_element())
         return nullptr;
     if (is_html_body_element())
         return nullptr;
-    if (layout_node()->is_fixed_position())
+    bool const no_ancestor_establishes_a_fixed_position_containing_block = !any_ancestor_establishes_a_fixed_position_containing_block(*layout_node());
+    if (layout_node()->is_fixed_position() && no_ancestor_establishes_a_fixed_position_containing_block)
         return nullptr;
 
     // 2. Let ancestor be the parent of the element in the flat tree and repeat these substeps:
-    auto ancestor = shadow_including_first_ancestor_of_type<DOM::Element>();
+    auto ancestor = first_flat_tree_ancestor_of_type<DOM::Element>();
     while (true) {
+        // 1. If ancestor is closed-shadow-hidden from the element, its computed value of the position property is
+        //    fixed, and no ancestor establishes a fixed position containing block, terminate this algorithm and return
+        //    null.
         bool ancestor_is_closed_shadow_hidden = ancestor->is_closed_shadow_hidden_from(*this);
-        // 1. If ancestor is closed-shadow-hidden from the element and its computed value of the position property is
-        //   fixed, terminate this algorithm and return null.
-        if (ancestor_is_closed_shadow_hidden && ancestor->computed_properties()->position() == CSS::Positioning::Fixed)
+        if (ancestor_is_closed_shadow_hidden
+            && ancestor->computed_properties()->position() == CSS::Positioning::Fixed
+            && no_ancestor_establishes_a_fixed_position_containing_block)
             return nullptr;
 
         // 2. If ancestor is not closed-shadow-hidden from the element and satisfies at least one of the following,
         //    terminate this algorithm and return ancestor.
         if (!ancestor_is_closed_shadow_hidden) {
-            // - ancestor is a containing block of absolutely-positioned descendants (regardless of whether there are
-            //    any absolutely-positioned descendants).
-            if (ancestor->layout_node()->is_positioned())
+            // NB: An ancestor in the flat tree may not have a layout node (e.g., it has display: none).
+            //     Such ancestors can't be positioned or establish containing blocks, so we skip those checks.
+            // - The element is in a fixed position containing block, and ancestor is a containing block for
+            //   fixed-positioned descendants.
+            // FIXME: This is ambiguous but I believe it means any ancestor establishes a fixed position containing block.
+            //        https://github.com/w3c/csswg-drafts/pull/12531/commits/48e905bb3859f80ce822299f7e6b76515d867fc3#r2623785087
+            if (!no_ancestor_establishes_a_fixed_position_containing_block && ancestor->layout_node() && ancestor->layout_node()->establishes_a_fixed_positioning_containing_block())
                 return const_cast<Element*>(ancestor);
-
+            // - The element is not in a fixed position containing block, and:
+            if (no_ancestor_establishes_a_fixed_position_containing_block) {
+                // - ancestor is a containing block of absolutely-positioned descendants (regardless of whether there
+                //   are any absolutely-positioned descendants).
+                if (ancestor->layout_node() && ancestor->layout_node()->is_positioned())
+                    return const_cast<Element*>(ancestor);
+                // - It is the body element.
+                if (ancestor->is_html_body_element())
+                    return const_cast<Element*>(ancestor);
+                // - The computed value of the position property of the element is static and the ancestor is one of
+                //   the following HTML elements: td, th, or table.
+                if (computed_properties()->position() == CSS::Positioning::Static && ancestor->local_name().is_one_of(HTML::TagNames::td, HTML::TagNames::th, HTML::TagNames::table))
+                    return const_cast<Element*>(ancestor);
+            }
             // - FIXME: The element has a different effective zoom than ancestor.
-
-            // - It is the body element.
-            if (ancestor->is_html_body_element())
-                return const_cast<Element*>(ancestor);
-
-            // - The computed value of the position property of the element is static and the ancestor is one of the following HTML elements: td, th, or table.
-            if (computed_properties()->position() == CSS::Positioning::Static && ancestor->local_name().is_one_of(HTML::TagNames::td, HTML::TagNames::th, HTML::TagNames::table))
-                return const_cast<Element*>(ancestor);
         }
 
         // 3. If there is no more parent of ancestor in the flat tree, terminate this algorithm and return null.
-        auto parent_of_ancestor = ancestor->shadow_including_first_ancestor_of_type<DOM::Element>();
+        auto parent_of_ancestor = ancestor->first_flat_tree_ancestor_of_type<DOM::Element>();
         if (!parent_of_ancestor)
             return nullptr;
 
@@ -589,7 +601,7 @@ int HTMLElement::offset_top() const
         return 0;
 
     // NOTE: Ensure that layout is up-to-date before looking at metrics.
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementOffsetTop);
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementOffsetTop);
 
     if (!paintable_box())
         return 0;
@@ -631,7 +643,7 @@ int HTMLElement::offset_left() const
         return 0;
 
     // NOTE: Ensure that layout is up-to-date before looking at metrics.
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementOffsetLeft);
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementOffsetLeft);
 
     if (!paintable_box())
         return 0;
@@ -669,10 +681,10 @@ int HTMLElement::offset_left() const
 int HTMLElement::offset_width() const
 {
     // NOTE: Ensure that layout is up-to-date before looking at metrics.
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementOffsetWidth);
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementOffsetWidth);
 
     // 1. If the element does not have any associated box return zero and terminate this algorithm.
-    auto const* box = paintable_box();
+    auto box = paintable_box();
     if (!box)
         return 0;
 
@@ -681,17 +693,17 @@ int HTMLElement::offset_width() const
     //
     //    If the element’s principal box is an inline-level box which was "split" by a block-level descendant, also
     //    include fragments generated by the block-level descendants, unless they are zero width or height.
-    return box->absolute_united_border_box_rect().width().to_int();
+    return round(box->absolute_united_border_box_rect().width()).to_int();
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsetheight
 int HTMLElement::offset_height() const
 {
     // NOTE: Ensure that layout is up-to-date before looking at metrics.
-    const_cast<DOM::Document&>(document()).update_layout(DOM::UpdateLayoutReason::HTMLElementOffsetHeight);
+    const_cast<DOM::Document&>(document()).update_layout_if_needed_for_node(*this, DOM::UpdateLayoutReason::HTMLElementOffsetHeight);
 
     // 1. If the element does not have any associated box return zero and terminate this algorithm.
-    auto const* box = paintable_box();
+    auto box = paintable_box();
     if (!box)
         return 0;
 
@@ -700,26 +712,13 @@ int HTMLElement::offset_height() const
     //
     //    If the element’s principal box is an inline-level box which was "split" by a block-level descendant, also
     //    include fragments generated by the block-level descendants, unless they are zero width or height.
-    return box->absolute_united_border_box_rect().height().to_int();
-}
-
-// https://html.spec.whatwg.org/multipage/links.html#cannot-navigate
-bool HTMLElement::cannot_navigate() const
-{
-    // An element element cannot navigate if one of the following is true:
-
-    // - element's node document is not fully active
-    if (!document().is_fully_active())
-        return true;
-
-    // - element is not an a element and is not connected.
-    return !is<HTML::HTMLAnchorElement>(this) && !is_connected();
+    return round(box->absolute_united_border_box_rect().height()).to_int();
 }
 
 void HTMLElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_)
 {
     Base::attribute_changed(name, old_value, value, namespace_);
-    HTMLOrSVGElement::attribute_changed(name, old_value, value, namespace_);
+    HTMLOrSVGOrMathMLElement::attribute_changed(name, old_value, value, namespace_);
 
     if (name == HTML::AttributeNames::contenteditable) {
         if (!value.has_value()) {
@@ -738,6 +737,10 @@ void HTMLElement::attribute_changed(FlyString const& name, Optional<String> cons
             // Having an invalid value maps to the "inherit" state.
             m_content_editable_state = ContentEditableState::Inherit;
         }
+        for_each_in_inclusive_subtree([](Node& node) {
+            node.recompute_editable_subtree_flag();
+            return TraversalDecision::Continue;
+        });
     } else if (name == HTML::AttributeNames::inert) {
         // https://html.spec.whatwg.org/multipage/interaction.html#the-inert-attribute
         // The inert attribute is a boolean attribute that indicates, by its presence, that the element and all its flat tree descendants which don't otherwise escape inertness
@@ -776,37 +779,51 @@ void HTMLElement::attribute_changed(FlyString const& name, Optional<String> cons
             && popover_value_to_state(old_value) != popover_value_to_state(value))
             MUST(hide_popover(FocusPreviousElement::Yes, FireEvents::Yes, ThrowExceptions::No, IgnoreDomState::Yes, nullptr));
     }();
+
+    if (is_form_associated_element()) {
+        form_node_attribute_changed(name, value);
+        form_associated_element_attribute_changed(name, old_value, value, namespace_);
+    }
 }
 
 void HTMLElement::set_subtree_inertness(bool is_inert)
 {
-    set_inert(is_inert);
+    auto update_inertness = [&](HTMLElement& element) {
+        if (element.is_inert() == is_inert)
+            return;
+        element.set_inert(is_inert);
+        element.set_needs_repaint();
+    };
+
+    update_inertness(*this);
     for_each_in_subtree_of_type<HTMLElement>([&](auto& html_element) {
         if (html_element.has_attribute(HTML::AttributeNames::inert))
             return TraversalDecision::SkipChildrenAndContinue;
         // FIXME: Exclude elements that should escape inertness.
-        html_element.set_inert(is_inert);
+        update_inertness(html_element);
         return TraversalDecision::Continue;
     });
-
-    if (auto paintable_box = this->paintable_box())
-        paintable_box->set_needs_paint_only_properties_update(true);
 }
 
 WebIDL::ExceptionOr<void> HTMLElement::cloned(Web::DOM::Node& copy, bool clone_children) const
 {
     TRY(Base::cloned(copy, clone_children));
-    TRY(HTMLOrSVGElement::cloned(copy, clone_children));
+    TRY(HTMLOrSVGOrMathMLElement::cloned(copy, clone_children));
     return {};
 }
 
 void HTMLElement::inserted()
 {
     Base::inserted();
-    HTMLOrSVGElement::inserted();
+    HTMLOrSVGOrMathMLElement::inserted();
 
     if (auto* parent_html_element = first_ancestor_of_type<HTMLElement>(); parent_html_element && parent_html_element->is_inert() && !has_attribute(HTML::AttributeNames::inert))
         set_subtree_inertness(true);
+
+    if (is_form_associated_element()) {
+        form_node_was_inserted();
+        form_associated_element_was_inserted();
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#fire-a-synthetic-pointer-event
@@ -860,7 +877,7 @@ GC::Ptr<DOM::NodeList> HTMLElement::labels()
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-hidden
-Variant<bool, double, String> HTMLElement::hidden() const
+Variant<bool, double, String, Empty> HTMLElement::hidden() const
 {
     // 1. If the hidden attribute is in the hidden until found state, then return "until-found".
     auto const& hidden = get_attribute(HTML::AttributeNames::hidden);
@@ -873,7 +890,7 @@ Variant<bool, double, String> HTMLElement::hidden() const
     return false;
 }
 
-void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
+void HTMLElement::set_hidden(Variant<bool, double, String, Empty> const& given_value)
 {
     // 1. If the given value is a string that is an ASCII case-insensitive match for "until-found", then set the hidden attribute to "until-found".
     if (given_value.has<String>()) {
@@ -884,11 +901,6 @@ void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
         }
         // 3. Otherwise, if the given value is the empty string, then remove the hidden attribute.
         if (string.is_empty()) {
-            remove_attribute(HTML::AttributeNames::hidden);
-            return;
-        }
-        // 4. Otherwise, if the given value is null, then remove the hidden attribute.
-        if (string.equals_ignoring_ascii_case("null"sv) || string.equals_ignoring_ascii_case("undefined"sv)) {
             remove_attribute(HTML::AttributeNames::hidden);
             return;
         }
@@ -908,6 +920,11 @@ void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
             remove_attribute(HTML::AttributeNames::hidden);
             return;
         }
+    }
+    // 4. Otherwise, if the given value is null, then remove the hidden attribute.
+    else if (given_value.has<Empty>()) {
+        remove_attribute(HTML::AttributeNames::hidden);
+        return;
     }
     // 7. Otherwise, set the hidden attribute to the empty string.
     set_attribute_value(HTML::AttributeNames::hidden, ""_string);
@@ -937,12 +954,11 @@ void HTMLElement::click()
 }
 
 // https://html.spec.whatwg.org/multipage/custom-elements.html#form-associated-custom-element
-bool HTMLElement::is_form_associated_custom_element()
+bool HTMLElement::is_form_associated_custom_element() const
 {
     // An autonomous custom element is called a form-associated custom element if the element is associated with a
     // custom element definition whose form-associated field is set to true.
-    auto definition = document().lookup_custom_element_definition(namespace_uri(), local_name(), is_value());
-    return definition->form_associated();
+    return custom_element_definition() && custom_element_definition()->form_associated();
 }
 
 Optional<ARIA::Role> HTMLElement::default_role() const
@@ -1072,73 +1088,16 @@ Optional<ARIA::Role> HTMLElement::default_role() const
     return {};
 }
 
-// https://html.spec.whatwg.org/multipage/semantics.html#get-an-element's-target
-String HTMLElement::get_an_elements_target(Optional<String> target) const
-{
-    // To get an element's target, given an a, area, or form element element, and an optional string-or-null target (default null), run these steps:
-
-    // 1. If target is null, then:
-    if (!target.has_value()) {
-        // 1. If element has a target attribute, then set target to that attribute's value.
-        if (auto maybe_target = attribute(AttributeNames::target); maybe_target.has_value()) {
-            target = maybe_target.release_value();
-        }
-        // 2. Otherwise, if element's node document contains a base element with a target attribute,
-        //    set target to the value of the target attribute of the first such base element.
-        if (auto base_element = document().first_base_element_with_target_in_tree_order())
-            target = base_element->attribute(AttributeNames::target);
-    }
-
-    // 2. If target is not null, and contains an ASCII tab or newline and a U+003C (<), then set target to "_blank".
-    if (target.has_value() && target->bytes_as_string_view().contains("\t\n\r"sv) && target->contains('<'))
-        target = "_blank"_string;
-
-    // 3. Return target.
-    return target.value_or({});
-}
-
-// https://html.spec.whatwg.org/multipage/links.html#get-an-element's-noopener
-TokenizedFeature::NoOpener HTMLElement::get_an_elements_noopener(URL::URL const& url, StringView target) const
-{
-    // To get an element's noopener, given an a, area, or form element element, a URL record url, and a string target,
-    // perform the following steps. They return a boolean.
-    auto rel = MUST(get_attribute_value(HTML::AttributeNames::rel).to_lowercase());
-    auto link_types = rel.bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
-
-    // 1. If element's link types include the noopener or noreferrer keyword, then return true.
-    if (link_types.contains_slow("noopener"sv) || link_types.contains_slow("noreferrer"sv))
-        return TokenizedFeature::NoOpener::Yes;
-
-    // 2. If element's link types do not include the opener keyword and
-    //    target is an ASCII case-insensitive match for "_blank", then return true.
-    if (!link_types.contains_slow("opener"sv) && target.equals_ignoring_ascii_case("_blank"sv))
-        return TokenizedFeature::NoOpener::Yes;
-
-    // 3. If url's blob URL entry is not null:
-    if (url.blob_url_entry().has_value()) {
-        // 1. Let blobOrigin be url's blob URL entry's environment's origin.
-        auto const& blob_origin = url.blob_url_entry()->environment.origin;
-
-        // 2. Let topLevelOrigin be element's relevant settings object's top-level origin.
-        auto const& top_level_origin = relevant_settings_object(*this).top_level_origin;
-
-        // 3. If blobOrigin is not same site with topLevelOrigin, then return true.
-        if (!blob_origin.is_same_site(top_level_origin.value()))
-            return TokenizedFeature::NoOpener::Yes;
-    }
-
-    // 4. Return false.
-    return TokenizedFeature::NoOpener::No;
-}
-
+// https://html.spec.whatwg.org/multipage/custom-elements.html#dom-attachinternals
 WebIDL::ExceptionOr<GC::Ref<ElementInternals>> HTMLElement::attach_internals()
 {
     // 1. If this's is value is not null, then throw a "NotSupportedError" DOMException.
     if (is_value().has_value())
         return WebIDL::NotSupportedError::create(realm(), "ElementInternals cannot be attached to a customized built-in element"_utf16);
 
-    // 2. Let definition be the result of looking up a custom element definition given this's node document, its namespace, its local name, and null as the is value.
-    auto definition = document().lookup_custom_element_definition(namespace_uri(), local_name(), is_value());
+    // 2. Let definition be the result of looking up a custom element definition given this's custom element registry,
+    //    this's namespace, this's local name, and null.
+    auto definition = look_up_a_custom_element_definition(custom_element_registry(), namespace_uri(), local_name(), {});
 
     // 3. If definition is null, then throw an "NotSupportedError" DOMException.
     if (!definition)
@@ -1199,7 +1158,7 @@ void HTMLElement::set_popover(Optional<String> value)
         remove_attribute(HTML::AttributeNames::popover);
 }
 
-void HTMLElement::adjust_computed_style(CSS::ComputedProperties& style)
+void HTMLElement::adjust_computed_style(CSS::ComputedProperties::Builder& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (local_name() == HTML::TagNames::wbr) {
@@ -1253,17 +1212,17 @@ WebIDL::ExceptionOr<bool> HTMLElement::check_popover_validity(ExpectedToBeShowin
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#dom-showpopover
-WebIDL::ExceptionOr<void> HTMLElement::show_popover_for_bindings(ShowPopoverOptions const& options)
+WebIDL::ExceptionOr<void> HTMLElement::show_popover_for_bindings(Bindings::ShowPopoverOptions const& options)
 {
-    // 1. Let invoker be options["source"] if it exists; otherwise, null.
-    auto invoker = options.source;
-    // 2. Run show popover given this, true, and invoker.
-    return show_popover(ThrowExceptions::Yes, invoker);
+    // 1. Let source be options["source"] if it exists; otherwise, null.
+    auto source = GC::Ptr<HTMLElement> { options.source };
+    // 2. Run show popover given this, true, and source.
+    return show_popover(ThrowExceptions::Yes, source);
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#show-popover
 // https://whatpr.org/html/9457/popover.html#show-popover
-WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_exceptions, GC::Ptr<HTMLElement> invoker)
+WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_exceptions, GC::Ptr<HTMLElement> source)
 {
     // 1. If the result of running check popover validity given element, false, throwExceptions, null and false is false, then return.
     if (!TRY(check_popover_validity(ExpectedToBeShowing::No, throw_exceptions, nullptr, IgnoreDomState::No)))
@@ -1272,8 +1231,8 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
     // 2. Let document be element's node document.
     auto& document = this->document();
 
-    // 3. Assert: element's popover invoker is null.
-    VERIFY(!m_popover_invoker);
+    // 3. Assert: element's popover trigger is null.
+    VERIFY(!m_popover_trigger);
 
     // 4. Assert: element is not in document's top layer.
     VERIFY(!in_top_layer());
@@ -1294,12 +1253,16 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
             m_popover_showing_or_hiding = false;
     };
 
-    // 9. If the result of firing an event named beforetoggle, using ToggleEvent, with the cancelable attribute initialized to true, the oldState attribute initialized to "closed", the newState attribute initialized to "open" at element, and the source attribute initialized to invoker at element is false, then run cleanupShowingFlag and return.
-    ToggleEventInit event_init {};
+    // 9. If the result of firing an event named beforetoggle, using ToggleEvent, with the cancelable attribute
+    //    initialized to true, the oldState attribute initialized to "closed", the newState attribute initialized to
+    //    "open" at element, and the source attribute initialized to source at element is false,
+    //    then run cleanupShowingFlag and return.
+    Bindings::ToggleEventInit event_init {};
     event_init.old_state = "closed"_string;
     event_init.new_state = "open"_string;
     event_init.cancelable = true;
-    if (!dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init), invoker))) {
+    event_init.source = GC::make_root<DOM::Element>(source.ptr());
+    if (!dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init)))) {
         cleanup_showing_flag();
         return {};
     }
@@ -1324,13 +1287,15 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
     };
     StackToAppendTo stack_to_append_to = StackToAppendTo::Null;
 
-    // 16. If originalType is the auto state, then:
+    // NB: Steps 14 and 15 are implemented inside step 17 instead, see note below.
+
+    // 16. If originalType is the Auto state, then:
     if (original_type == "auto"sv) {
         // 1. Run close entire popover list given document's showing hint popover list, shouldRestoreFocus, and fireEvents.
         close_entire_popover_list(document.showing_hint_popover_list(), should_restore_focus, fire_events);
 
-        // 2. Let ancestor be the result of running the topmost popover ancestor algorithm given element, document's showing auto popover list, invoker, and true.
-        Variant<GC::Ptr<HTMLElement>, GC::Ptr<DOM::Document>> ancestor = topmost_popover_ancestor(this, document.showing_auto_popover_list(), invoker, IsPopover::Yes);
+        // 2. Let ancestor be the result of running the topmost popover ancestor algorithm given element, document's showing auto popover list, source, and true.
+        Variant<GC::Ptr<HTMLElement>, GC::Ptr<DOM::Document>> ancestor = topmost_popover_ancestor(this, document.showing_auto_popover_list(), source, IsPopover::Yes);
 
         // 3. If ancestor is null, then set ancestor to document.
         if (!ancestor.get<GC::Ptr<HTMLElement>>())
@@ -1349,10 +1314,10 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
         // AD-HOC: Steps 14 and 15 have been moved here to avoid hitting the `popover != manual` assertion in the topmost popover ancestor algorithm.
         // Spec issue: https://github.com/whatwg/html/issues/10988.
         // 14. Let autoAncestor be the result of running the topmost popover ancestor algorithm given element, document's showing auto popover list, invoker, and true.
-        auto auto_ancestor = topmost_popover_ancestor(this, document.showing_auto_popover_list(), invoker, IsPopover::Yes);
+        auto auto_ancestor = topmost_popover_ancestor(this, document.showing_auto_popover_list(), source, IsPopover::Yes);
 
         // 15. Let hintAncestor be the result of running the topmost popover ancestor algorithm given element, document's showing hint popover list, invoker, and true.
-        auto hint_ancestor = topmost_popover_ancestor(this, document.showing_hint_popover_list(), invoker, IsPopover::Yes);
+        auto hint_ancestor = topmost_popover_ancestor(this, document.showing_hint_popover_list(), source, IsPopover::Yes);
 
         // 1. If hintAncestor is not null, then:
         if (hint_ancestor) {
@@ -1434,9 +1399,8 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
         }
 
         // 6. Set element's popover close watcher to the result of establishing a close watcher given element's relevant global object, with:
-        m_popover_close_watcher = CloseWatcher::establish(*document.window());
         // - cancelAction being to return true.
-        // We simply don't add an event listener for the cancel action.
+        // NB: We simply don't add an event listener for the cancel action.
         // - closeAction being to hide a popover given element, true, true, false, and null.
         auto close_callback_function = JS::NativeFunction::create(
             realm(), [this](JS::VM&) {
@@ -1446,9 +1410,11 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
             },
             0, Utf16FlyString {}, &realm());
         auto close_callback = realm().heap().allocate<WebIDL::CallbackType>(*close_callback_function, realm());
-        m_popover_close_watcher->add_event_listener_without_options(HTML::EventNames::close, DOM::IDLEventListener::create(realm(), close_callback));
         // - getEnabledState being to return true.
-        m_popover_close_watcher->set_enabled(true);
+        auto get_enabled_state = GC::create_function(heap(), [] { return true; });
+
+        m_popover_close_watcher = CloseWatcher::establish(*document.window(), move(get_enabled_state));
+        m_popover_close_watcher->add_event_listener_without_options(HTML::EventNames::close, DOM::IDLEventListener::create(realm(), close_callback));
     }
     // FIXME: 19. Set element's previously focused element to null.
     // FIXME: 20. Let originallyFocusedElement be document's focused area of the document's DOM anchor.
@@ -1456,13 +1422,13 @@ WebIDL::ExceptionOr<void> HTMLElement::show_popover(ThrowExceptions throw_except
     document.add_an_element_to_the_top_layer(*this);
     // 22. Set element's popover visibility state to showing.
     m_popover_visibility_state = PopoverVisibilityState::Showing;
-    // 23. Set element's popover invoker to invoker.
-    m_popover_invoker = invoker;
-    // FIXME: 24. Set element's implicit anchor element to invoker.
+    // 23. Set element's popover trigger to source.
+    m_popover_trigger = source;
+    // FIXME: 24. Set element's implicit anchor element to source.
     // FIXME: 25. Run the popover focusing steps given element.
     // FIXME: 26. If shouldRestoreFocus is true and element's popover attribute is not in the No Popover state, then set element's previously focused element to originallyFocusedElement.
-    // 27. Queue a popover toggle event task given element, "closed", "open", and invoker.
-    queue_a_popover_toggle_event_task("closed"_string, "open"_string, invoker);
+    // 27. Queue a popover toggle event task given element, "closed", "open", and source.
+    queue_a_popover_toggle_event_task("closed"_string, "open"_string, source);
     // 28. Run cleanupShowingFlag.
     cleanup_showing_flag();
 
@@ -1529,25 +1495,30 @@ WebIDL::ExceptionOr<void> HTMLElement::hide_popover(FocusPreviousElement focus_p
 
     // 9. If fireEvents is true:
     if (fire_events == FireEvents::Yes) {
-        // 9.1. Fire an event named beforetoggle, using ToggleEvent, with the oldState attribute initialized to "open", the newState attribute initialized to "closed", and the source attribute set to source at element.
-        ToggleEventInit event_init {};
+        // 1. Fire an event named beforetoggle, using ToggleEvent, with the oldState attribute initialized to "open",
+        //    the newState attribute initialized to "closed", and the source attribute set to source at element.
+        Bindings::ToggleEventInit event_init {};
         event_init.old_state = "open"_string;
         event_init.new_state = "closed"_string;
-        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init), source));
+        event_init.source = GC::make_root<DOM::Element>(source.ptr());
+        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init)));
 
-        // 9.2. If autoPopoverListContainsElement is true and document's showing auto popover list's last item is not element, then run hide all popovers until given element, focusPreviousElement, and false.
+        // 2. If autoPopoverListContainsElement is true and document's showing auto popover list's last item is not
+        //    element, then run hide all popovers until given element, focusPreviousElement, and false.
         if (auto_popover_list_contains_element && (showing_popovers.is_empty() || showing_popovers.last() != this))
             hide_all_popovers_until(GC::Ptr(this), focus_previous_element, FireEvents::No);
 
-        // 9.3. If the result of running check popover validity given element, true, throwExceptions, null, and ignoreDomState is false, then run cleanupSteps and return.
+        // 3. If the result of running check popover validity given element, true, throwExceptions, null, and
+        //    ignoreDomState is false, then run cleanupSteps and return.
         if (!TRY(check_popover_validity(ExpectedToBeShowing::Yes, throw_exceptions, nullptr, ignore_dom_state))) {
             cleanup_steps();
             return {};
         }
         // 9.4. Request an element to be removed from the top layer given element.
         document.request_an_element_to_be_remove_from_the_top_layer(*this);
-    } else {
-        // 10. Otherwise, remove an element from the top layer immediately given element.
+    }
+    // 10. Otherwise, remove an element from the top layer immediately given element.
+    else {
         document.remove_an_element_from_the_top_layer_immediately(*this);
     }
 
@@ -1576,8 +1547,8 @@ WebIDL::ExceptionOr<void> HTMLElement::hide_popover(FocusPreviousElement focus_p
         }
     }
 
-    // 11. Set element's popover invoker to null.
-    m_popover_invoker = nullptr;
+    // 11. Set element's popover trigger to null.
+    m_popover_trigger = nullptr;
 
     // 12. Set element's opened in popover mode to null.
     m_opened_in_popover_mode = {};
@@ -1607,26 +1578,26 @@ WebIDL::ExceptionOr<bool> HTMLElement::toggle_popover(TogglePopoverOptionsOrForc
 {
     // 1. Let force be null.
     Optional<bool> force;
-    GC::Ptr<HTMLElement> invoker;
+    GC::Ptr<HTMLElement> source;
 
     // 2. If options is a boolean, set force to options.
     options.visit(
         [&force](bool forceBool) {
             force = forceBool;
         },
-        [&force, &invoker](TogglePopoverOptions options) {
+        [&force, &source](Bindings::TogglePopoverOptions options) {
             // 3. Otherwise, if options["force"] exists, set force to options["force"].
             force = options.force;
-            // 4. Let invoker be options["source"] if it exists; otherwise, null.
-            invoker = options.source;
+            // 4. Let source be options["source"] if it exists; otherwise, null.
+            source = options.source;
         });
 
     // 5. If this's popover visibility state is showing, and force is null or false, then run the hide popover algorithm given this, true, true, true, false, and null.
     if (popover_visibility_state() == PopoverVisibilityState::Showing && (!force.has_value() || !force.value()))
         TRY(hide_popover(FocusPreviousElement::Yes, FireEvents::Yes, ThrowExceptions::Yes, IgnoreDomState::No, nullptr));
-    // 6. Otherwise, if force is not present or true, then run show popover given this true, and invoker.
+    // 6. Otherwise, if force is not present or true, then run show popover given this true, and source.
     else if (!force.has_value() || force.value())
-        TRY(show_popover(ThrowExceptions::Yes, invoker));
+        TRY(show_popover(ThrowExceptions::Yes, source));
     // 7. Otherwise:
     else {
         // 7.1 Let expectedToBeShowing be true if this's popover visibility state is showing; otherwise false.
@@ -1759,9 +1730,10 @@ void HTMLElement::close_entire_popover_list(Vector<GC::Ref<HTMLElement>> const& 
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#topmost-popover-ancestor
-GC::Ptr<HTMLElement> HTMLElement::topmost_popover_ancestor(GC::Ptr<DOM::Node> new_popover_or_top_layer_element, Vector<GC::Ref<HTMLElement>> const& popover_list, GC::Ptr<HTMLElement> invoker, IsPopover is_popover)
+GC::Ptr<HTMLElement> HTMLElement::topmost_popover_ancestor(GC::Ptr<DOM::Node> new_popover_or_top_layer_element, Vector<GC::Ref<HTMLElement>> const& popover_list, GC::Ptr<HTMLElement> source, IsPopover is_popover)
 {
-    // To find the topmost popover ancestor, given a Node newPopoverOrTopLayerElement, a list popoverList, an HTML element or null invoker, and a boolean isPopover, perform the following steps. They return an HTML element or null.
+    // To find the topmost popover ancestor, given a Node newPopoverOrTopLayerElement, a list popoverList, an HTML
+    // element or null source, and a boolean isPopover, perform the following steps. They return an HTML element or null.
 
     // 1. If isPopover is true:
     auto* new_popover = as_if<HTML::HTMLElement>(*new_popover_or_top_layer_element);
@@ -1777,8 +1749,8 @@ GC::Ptr<HTMLElement> HTMLElement::topmost_popover_ancestor(GC::Ptr<DOM::Node> ne
     }
     // 2. Otherwise:
     else {
-        // 1. Assert: invoker is null.
-        VERIFY(!invoker);
+        // 1. Assert: source is null.
+        VERIFY(!source);
     }
 
     // 3. Let popoverPositions be an empty ordered map.
@@ -1836,7 +1808,7 @@ GC::Ptr<HTMLElement> HTMLElement::topmost_popover_ancestor(GC::Ptr<DOM::Node> ne
 
             // 5. If okNesting is false, then set candidate to candidateAncestor's parent in the flat tree.
             if (!ok_nesting)
-                candidate = candidate_ancestor->shadow_including_first_ancestor_of_type<HTMLElement>();
+                candidate = candidate_ancestor->first_flat_tree_ancestor_of_type<HTMLElement>();
         }
 
         // 5. Let candidatePosition be popoverPositions[candidateAncestor].
@@ -1848,10 +1820,10 @@ GC::Ptr<HTMLElement> HTMLElement::topmost_popover_ancestor(GC::Ptr<DOM::Node> ne
     };
 
     // 10. Run checkAncestor given newPopoverOrTopLayerElement's parent node within the flat tree.
-    check_ancestor(new_popover_or_top_layer_element->shadow_including_first_ancestor_of_type<HTMLElement>());
+    check_ancestor(new_popover_or_top_layer_element->first_flat_tree_ancestor_of_type<HTMLElement>());
 
-    // 11. Run checkAncestor given invoker.
-    check_ancestor(invoker.ptr());
+    // 11. Run checkAncestor given source.
+    check_ancestor(source.ptr());
 
     // 12. Return topmostPopoverAncestor.
     return topmost_popover_ancestor;
@@ -1872,17 +1844,17 @@ GC::Ptr<HTMLElement> HTMLElement::nearest_inclusive_open_popover()
             return current_node;
 
         // 2. Set currentNode to currentNode's parent in the flat tree.
-        current_node = current_node->shadow_including_first_ancestor_of_type<HTMLElement>();
+        current_node = current_node->first_flat_tree_ancestor_of_type<HTMLElement>();
     }
 
     // 3. Return null.
     return {};
 }
 
-// https://html.spec.whatwg.org/multipage/popover.html#nearest-inclusive-target-popover-for-invoker
-GC::Ptr<HTMLElement> HTMLElement::nearest_inclusive_target_popover_for_invoker()
+// https://html.spec.whatwg.org/multipage/popover.html#nearest-inclusive-target-popover
+GC::Ptr<HTMLElement> HTMLElement::nearest_inclusive_target_popover()
 {
-    // To find the nearest inclusive target popover for invoker given a Node node:
+    // To find the nearest inclusive target popover given a Node node:
 
     // 1. Let currentNode be node.
     auto* current_node = this;
@@ -1890,7 +1862,7 @@ GC::Ptr<HTMLElement> HTMLElement::nearest_inclusive_target_popover_for_invoker()
     // 2. While currentNode is not null:
     while (current_node) {
         // 1. Let targetPopover be currentNode's popover target element.
-        auto target_popover = PopoverInvokerElement::get_the_popover_target_element(*current_node);
+        auto target_popover = PopoverTargetAttributes::get_the_popover_target_element(*current_node);
 
         // 2. If targetPopover is not null and targetPopover's popover attribute is in the Auto state or the Hint state, and targetPopover's popover visibility state is showing, then return targetPopover.
         if (target_popover) {
@@ -1899,7 +1871,7 @@ GC::Ptr<HTMLElement> HTMLElement::nearest_inclusive_target_popover_for_invoker()
         }
 
         // 3. Set currentNode to currentNode's ancestor in the flat tree.
-        current_node = current_node->shadow_including_first_ancestor_of_type<HTMLElement>();
+        current_node = current_node->first_flat_tree_ancestor_of_type<HTMLElement>();
     }
 
     return {};
@@ -1926,11 +1898,12 @@ void HTMLElement::queue_a_popover_toggle_event_task(String old_state, String new
     auto task_id = queue_an_element_task(HTML::Task::Source::DOMManipulation, [this, old_state, new_state = move(new_state), source]() mutable {
         // 1. Fire an event named toggle at element, using ToggleEvent, with the oldState attribute initialized to
         //    oldState, the newState attribute initialized to newState, and the source attribute initialized to source.
-        ToggleEventInit event_init {};
+        Bindings::ToggleEventInit event_init {};
         event_init.old_state = move(old_state);
         event_init.new_state = move(new_state);
+        event_init.source = GC::make_root<DOM::Element>(source.ptr());
 
-        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::toggle, move(event_init), source));
+        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::toggle, move(event_init)));
 
         // 2. Set element's popover toggle task tracker to null.
         m_popover_toggle_task_tracker = {};
@@ -2020,7 +1993,7 @@ GC::Ptr<HTMLElement> HTMLElement::topmost_clicked_popover(GC::Ptr<DOM::Node> nod
 
     GC::Ptr<HTMLElement> nearest_element = as_if<HTMLElement>(*node);
     if (!nearest_element)
-        nearest_element = node->shadow_including_first_ancestor_of_type<HTMLElement>();
+        nearest_element = node->first_flat_tree_ancestor_of_type<HTMLElement>();
 
     if (!nearest_element)
         return {};
@@ -2028,21 +2001,22 @@ GC::Ptr<HTMLElement> HTMLElement::topmost_clicked_popover(GC::Ptr<DOM::Node> nod
     // 1. Let clickedPopover be the result of running nearest inclusive open popover given node.
     auto clicked_popover = nearest_element->nearest_inclusive_open_popover();
 
-    // 2. Let invokerPopover be the result of running nearest inclusive target popover for invoker given node.
-    auto invoker_popover = nearest_element->nearest_inclusive_target_popover_for_invoker();
+    // 2. Let targetPopover be the result of running nearest inclusive target popover given node.
+    auto target_popover = nearest_element->nearest_inclusive_target_popover();
 
     if (!clicked_popover)
-        return invoker_popover;
+        return target_popover;
 
-    if (!invoker_popover)
+    if (!target_popover)
         return clicked_popover;
 
-    // 3. If the result of getting the popover stack position given clickedPopover is greater than the result of getting the popover stack position given invokerPopover, then return clickedPopover.
-    if (clicked_popover->popover_stack_position() > invoker_popover->popover_stack_position())
+    // 3. If the result of getting the popover stack position given clickedPopover is greater than the result of
+    //    getting the popover stack position given targetPopover, then return clickedPopover.
+    if (clicked_popover->popover_stack_position() > target_popover->popover_stack_position())
         return clicked_popover;
 
-    // 4. Return invokerPopover.
-    return invoker_popover;
+    // 4. Return targetPopover.
+    return target_popover;
 }
 
 void HTMLElement::did_receive_focus()
@@ -2080,29 +2054,94 @@ void HTMLElement::did_lose_focus()
     document().editing_host_manager()->set_active_contenteditable_element(nullptr);
 }
 
-void HTMLElement::removed_from(Node* old_parent, Node& old_root)
+// https://html.spec.whatwg.org/multipage/infrastructure.html#dom-trees:concept-node-remove-ext
+void HTMLElement::removed_from(IsSubtreeRoot is_subtree_root, Node* old_ancestor, Node& old_root)
 {
-    Element::removed_from(old_parent, old_root);
+    Element::removed_from(is_subtree_root, old_ancestor, old_root);
 
-    // https://html.spec.whatwg.org/multipage/infrastructure.html#dom-trees:concept-node-remove-ext
-    // If removedNode's popover attribute is not in the No Popover state, then run the hide popover algorithm given removedNode, false, false, false, true, and null.
+    // FIXME: 1. Let document be removedNode's node document.
+    // FIXME: 2. If document's focused area is removedNode, then set document's focused area to document's viewport,
+    //   and set document's relevant global object's navigation API's focus changed during ongoing navigation to false.
+
+    // 3. If removedNode is an element whose namespace is the HTML namespace, and this standard defines HTML element
+    //    removing steps for removedNode's local name, then run the corresponding HTML element removing steps given
+    //    removedNode, isSubtreeRoot, and oldAncestor.
+    // NB: This is done by overriding removed_from() in subclasses.
+
+    // 4. If removedNode is a form-associated element with a non-null form owner and removedNode and its form owner are
+    //    no longer in the same tree, then reset the form owner of removedNode.
+    // FIXME: Follow the spec here.
+    if (is_form_associated_element()) {
+        form_node_was_removed();
+        form_associated_element_was_removed(old_ancestor);
+    }
+
+    // 5. If removedNode's popover attribute is not in the No Popover state, then run the hide popover algorithm given
+    //    removedNode, false, false, false, true, and null.
     if (popover().has_value())
         MUST(hide_popover(FocusPreviousElement::No, FireEvents::No, ThrowExceptions::No, IgnoreDomState::Yes, nullptr));
 
-    if (old_parent) {
-        auto* parent_html_element = as_if<HTMLElement>(old_parent);
+    // AD-HOC: Update inertness
+    if (old_ancestor) {
+        auto* parent_html_element = as_if<HTMLElement>(old_ancestor);
         if (!parent_html_element)
-            parent_html_element = old_parent->first_ancestor_of_type<HTMLElement>();
+            parent_html_element = old_ancestor->first_ancestor_of_type<HTMLElement>();
         if (parent_html_element && parent_html_element->is_inert() && !has_attribute(HTML::AttributeNames::inert))
             set_subtree_inertness(false);
+    }
+}
+
+// https://html.spec.whatwg.org/multipage/infrastructure.html#dom-trees:concept-node-move-ext
+void HTMLElement::moved_from(IsSubtreeRoot is_subtree_root, GC::Ptr<DOM::Node> old_ancestor)
+{
+    Element::moved_from(is_subtree_root, old_ancestor);
+
+    // 1. If movedNode is an element whose namespace is the HTML namespace, and this standard defines HTML element
+    //    moving steps for movedNode's local name, then run the corresponding HTML element moving steps given
+    //    movedNode, isSubtreeRoot, and oldAncestor.
+    // NB: This is done by overriding moved_from() in subclasses.
+
+    // 2. If movedNode is a form-associated element with a non-null form owner and movedNode and its form owner are no
+    //    longer in the same tree, then reset the form owner of movedNode.
+    // FIXME: Follow the spec here.
+    if (is_form_associated_element()) {
+        form_node_was_moved();
+        form_associated_element_was_moved(old_ancestor);
     }
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-accesskeylabel
 String HTMLElement::access_key_label() const
 {
-    dbgln("FIXME: Implement HTMLElement::access_key_label()");
-    return String {};
+    // The accessKeyLabel IDL attribute must return a string that represents the element's assigned access key, if any.
+    // If the element does not have one, then the IDL attribute must return the empty string.
+
+    // An element's assigned access key is a key combination derived from the element's accesskey content attribute.
+    // https://html.spec.whatwg.org/multipage/interaction.html#assigned-access-key
+
+    // 1. If the element has no accesskey attribute, then skip to the fallback step below.
+    auto access_key = get_attribute(HTML::AttributeNames::accesskey);
+    if (!access_key.has_value() || access_key->is_empty())
+        return String {};
+
+    // 2. Otherwise, split the attribute's value on ASCII whitespace, and let keys be the resulting tokens.
+    // 3. For each value in keys in turn, in the order the tokens appeared in the attribute's value, run the following substeps:
+    //    3.1. If the value is not a string exactly one code point in length, then skip the remainder of these steps for this value.
+    // NB: We mimic Chromium here and treat the attribute value as a single key rather than splitting on whitespace.
+    //     The spec says to split on whitespace and try each token, but no browser besides IE/Edge implemented that.
+    //     If there is more than one code point, no access key is assigned. https://github.com/whatwg/html/issues/3769
+    if (access_key->code_points().length() > 1)
+        return String {};
+
+    // FIXME: 3.2. If the value does not correspond to a key on the system's keyboard, then skip the remainder of these steps for this value.
+    // FIXME: 3.3. If the user agent can find a mix of zero or more modifier keys that, combined with the key that corresponds to
+    //             the value given in the attribute, can be used as the access key, then the user agent may assign that combination
+    //             of keys as the element's assigned access key and return.
+    return *access_key;
+
+    // 4. Fallback: Optionally, the user agent may assign a key combination of its choosing as the element's assigned access key
+    //    and then return.
+    // 5. If this step is reached, the element has no assigned access key.
 }
 
 // https://html.spec.whatwg.org/multipage/dnd.html#dom-draggable
@@ -2251,15 +2290,15 @@ HTMLElement::AutocapitalizationHint HTMLElement::own_autocapitalization_hint() c
 {
     // The autocapitalization processing model is based on selecting among five autocapitalization hints, defined as follows:
     //
-    // default
+    // Default
     //     The user agent and input method should make their own determination of whether or not to enable autocapitalization.
     // none
     //     No autocapitalization should be applied (all letters should default to lowercase).
-    // sentences
+    // Sentences
     //     The first letter of each sentence should default to a capital letter; all other letters should default to lowercase.
-    // words
+    // Words
     //     The first letter of each word should default to a capital letter; all other letters should default to lowercase.
-    // characters
+    // Characters
     //     All letters should default to uppercase.
 
     // The autocapitalize attribute is an enumerated attribute whose states are the possible autocapitalization hints.
@@ -2268,14 +2307,14 @@ HTMLElement::AutocapitalizationHint HTMLElement::own_autocapitalization_hint() c
     // their state mappings are as follows:
 
     // Keyword    | State
-    // off        | none
+    // off        | None
     // none       |
-    // on         | sentences
+    // on         | Sentences
     // sentences  |
-    // words      | words
-    // characters | characters
+    // words      | Words
+    // characters | Characters
 
-    // The attribute's missing value default is the default state, and its invalid value default is the sentences state.
+    // The attribute's missing value default is the Default state, and its invalid value default is the Sentences state.
 
     // To compute the own autocapitalization hint of an element element, run the following steps:
     // 1. If the autocapitalize content attribute is present on element, and its value is not the empty string, return the
@@ -2297,12 +2336,13 @@ HTMLElement::AutocapitalizationHint HTMLElement::own_autocapitalization_hint() c
         return AutocapitalizationHint::Sentences;
     }
 
-    // If element is an autocapitalize-and-autocorrect inheriting element and has a non-null form owner, return the own autocapitalization hint of element's form owner.
+    // 2. If element is an autocapitalize-and-autocorrect inheriting element and has a non-null form owner, return the
+    //    own autocapitalization hint of element's form owner.
     auto const* form_associated_element = as_if<FormAssociatedElement>(this);
     if (form_associated_element && form_associated_element->is_autocapitalize_and_autocorrect_inheriting() && form_associated_element->form())
         return form_associated_element->form()->own_autocapitalization_hint();
 
-    // 3. Return default.
+    // 3. Return Default.
     return AutocapitalizationHint::Default;
 }
 
@@ -2313,9 +2353,9 @@ String HTMLElement::autocapitalize() const
     // 1. Let state be the own autocapitalization hint of this.
     auto state = own_autocapitalization_hint();
 
-    // 2. If state is default, then return the empty string.
-    // 3. If state is none, then return "none".
-    // 4. If state is sentences, then return "sentences".
+    // 2. If state is Default, then return the empty string.
+    // 3. If state is None, then return "none".
+    // 4. If state is Sentences, then return "sentences".
     // 5. Return the keyword value corresponding to state.
     switch (state) {
     case AutocapitalizationHint::Default:
@@ -2344,12 +2384,12 @@ HTMLElement::AutocorrectionState HTMLElement::used_autocorrection_state() const
 {
     // The autocorrect attribute is an enumerated attribute with the following keywords and states:
     // Keyword            | State | Brief description
-    // on                 | on    | The user agent is permitted to automatically correct spelling errors while the user
+    // on                 | On    | The user agent is permitted to automatically correct spelling errors while the user
     // (the empty string) |       | types. Whether spelling is automatically corrected while typing left is for the user
     //                    |       | agent to decide, and may depend on the element as well as the user's preferences.
-    // off                | off   | The user agent is not allowed to automatically correct spelling while the user types.
+    // off                | Off   | The user agent is not allowed to automatically correct spelling while the user types.
 
-    // The attribute's invalid value default and missing value default are both the on state.
+    // The attribute's invalid value default and missing value default are both the On state.
 
     auto autocorrect_attribute_state = [](Optional<String> attribute) {
         if (attribute.has_value() && attribute.value().equals_ignoring_ascii_case("off"sv))
@@ -2359,7 +2399,8 @@ HTMLElement::AutocorrectionState HTMLElement::used_autocorrection_state() const
     };
 
     // To compute the used autocorrection state of an element element, run these steps:
-    // 1. If element is an input element whose type attribute is in one of the URL, E-mail, or Password states, then return off.
+    // 1. If element is an input element whose type attribute is in one of the URL, E-mail, or Password states, then
+    //    return Off.
     if (auto const* input_element = as_if<HTMLInputElement>(this)) {
         if (first_is_one_of(input_element->type_state(), HTMLInputElement::TypeAttributeState::URL, HTMLInputElement::TypeAttributeState::Email, HTMLInputElement::TypeAttributeState::Password))
             return AutocorrectionState::Off;
@@ -2378,25 +2419,105 @@ HTMLElement::AutocorrectionState HTMLElement::used_autocorrection_state() const
             return autocorrect_attribute_state(form_associated_element->form()->attribute(HTML::AttributeNames::autocorrect));
     }
 
-    // 4. Return on.
+    // 4. Return On.
     return AutocorrectionState::On;
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-autocorrect
 bool HTMLElement::autocorrect() const
 {
-    // The autocorrect getter steps are: return true if the element's used autocorrection state is on and false if the element's used autocorrection state is off.
+    // The autocorrect getter steps are: return true if the element's used autocorrection state is On and false if the
+    // element's used autocorrection state is Off.
     return used_autocorrection_state() == AutocorrectionState::On;
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-autocorrect
 void HTMLElement::set_autocorrect(bool given_value)
 {
-    // The setter steps are: if the given value is true, then the element's autocorrect attribute must be set to "on"; otherwise it must be set to "off".
+    // The setter steps are: if the given value is true, then the element's autocorrect attribute must be set to "on";
+    // otherwise it must be set to "off".
     if (given_value)
         set_attribute_value(HTML::AttributeNames::autocorrect, "on"_string);
     else
         set_attribute_value(HTML::AttributeNames::autocorrect, "off"_string);
+}
+
+// https://html.spec.whatwg.org/multipage/sections.html#get-an-element's-computed-heading-level
+WebIDL::UnsignedLong HTMLElement::computed_heading_level() const
+{
+    // 1. Let level be 0.
+    auto level = 0u;
+
+    // 2. If element's local name is h1, then set level to 1.
+    if (local_name() == TagNames::h1)
+        level = 1;
+    // 3. If element's local name is h2, then set level to 2.
+    else if (local_name() == TagNames::h2)
+        level = 2;
+    // 4. If element's local name is h3, then set level to 3.
+    else if (local_name() == TagNames::h3)
+        level = 3;
+    // 5. If element's local name is h4, then set level to 4.
+    else if (local_name() == TagNames::h4)
+        level = 4;
+    // 6. If element's local name is h5, then set level to 5.
+    else if (local_name() == TagNames::h5)
+        level = 5;
+    // 7. If element's local name is h6, then set level to 6.
+    else if (local_name() == TagNames::h6)
+        level = 6;
+
+    // 8. Assert: level is not 0.
+    VERIFY(level != 0);
+
+    // 9. Increment level by the result of getting an element's computed heading offset given element.
+    level += computed_heading_offset();
+
+    // 10. If level is greater than 9, then return 9.
+    if (level > 9)
+        return 9;
+
+    // 11. Return level.
+    return level;
+}
+
+WebIDL::UnsignedLong HTMLElement::computed_heading_offset() const
+{
+    // 1. Let offset be 0.
+    auto offset = 0u;
+
+    // 2. Let inclusiveAncestor be element.
+    DOM::Node const* inclusive_ancestor = this;
+
+    // 3. While inclusiveAncestor is not null:
+    while (inclusive_ancestor) {
+        // 1. Let nextOffset be 0.
+        auto next_offset = 0u;
+
+        // 2. If inclusiveAncestor is an HTML element and has a headingoffset attribute, then parse its value using the
+        //    rules for parsing non-negative integers.
+        //    If the result of parsing the value is not an error, then set nextOffset to that value.
+        auto const* inclusive_ancestor_html_element = as_if<HTMLElement>(*inclusive_ancestor);
+        if (inclusive_ancestor_html_element) {
+            if (auto attribute = inclusive_ancestor_html_element->get_attribute(AttributeNames::headingoffset); attribute.has_value()) {
+                if (auto heading_offset = parse_non_negative_integer(attribute.value()); heading_offset.has_value())
+                    next_offset = *heading_offset;
+            }
+        }
+
+        // 3. Increment offset by nextOffset.
+        offset += next_offset;
+
+        // 4. If inclusiveAncestor is an HTML element and has a headingreset attribute, then return offset.
+        if (inclusive_ancestor_html_element && inclusive_ancestor_html_element->has_attribute(AttributeNames::headingreset))
+            return offset;
+
+        // 5. Set inclusiveAncestor to the parent node of inclusiveAncestor within the flat tree.
+        inclusive_ancestor = inclusive_ancestor->flat_tree_parent();
+    }
+
+    // 4. Return offset.
+    return offset;
 }
 
 }

@@ -1,4 +1,4 @@
-Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-inline
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
   BlockContainer <html> at [0,0] [0+0+0 800 0+0+0] [0+0+0 16 0+0+0] [BFC] children: not-inline
     BlockContainer <body> at [8,8] [8+0+0 784 0+0+8] [8+0+0 0 0+0+8] children: inline
       TextNode <#text> (not painted)
@@ -25,7 +25,7 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
       TextPaintable (TextNode<#text>)
     PaintableWithLines (BlockContainer(anonymous)) [395.140625,309 9.703125x0]
 
-SC for Viewport<#document> [0,0 800x600] [children: 3] (z-index: auto)
- SC for BlockContainer<HTML> [0,0 800x16] [children: 0] (z-index: auto)
- SC for BlockContainer(anonymous) [0,0 800x600] [children: 0] (z-index: auto)
- SC for BlockContainer<DIALOG>#dialog [395.140625,291 9.703125x18] [children: 0] (z-index: auto)
+SC for Viewport<#document> [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<HTML> [0,0 800x16] (z-index: auto)
+ SC for BlockContainer(anonymous) [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<DIALOG>#dialog [395.140625,291 9.703125x18] (z-index: auto)

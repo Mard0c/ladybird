@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2022, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2023, Luke Wilde <lukew@serenityos.org>
  *
@@ -29,7 +29,7 @@ public:
     size_t length() const { return m_media.size(); }
     Optional<String> item(u32 index) const;
     void append_medium(StringView);
-    void delete_medium(StringView);
+    WebIDL::ExceptionOr<void> delete_medium(StringView);
 
     virtual Optional<JS::Value> item_value(size_t index) const override;
 
@@ -37,6 +37,8 @@ public:
     bool matches() const;
 
     void set_associated_style_sheet(GC::Ref<StyleSheet> style_sheet) { m_associated_style_sheet = style_sheet; }
+
+    void dump(StringBuilder&, int indent_levels = 0) const;
 
 private:
     MediaList(JS::Realm&, Vector<NonnullRefPtr<MediaQuery>>&&);

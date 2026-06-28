@@ -10,29 +10,34 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/RefCounted.h>
+#include <AK/Time.h>
 #include <AK/Weakable.h>
+#include <LibHTTP/HeaderList.h>
 #include <LibURL/URL.h>
 #include <LibWeb/DOM/EventTarget.h>
 #include <LibWeb/DOMURL/URLSearchParams.h>
 #include <LibWeb/Fetch/BodyInit.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Statuses.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/MimeSniff/MimeType.h>
+#include <LibWeb/Platform/Timer.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/XHR/XMLHttpRequestEventTarget.h>
 
 namespace Web::XHR {
 
 // https://fetch.spec.whatwg.org/#typedefdef-xmlhttprequestbodyinit
-using DocumentOrXMLHttpRequestBodyInit = Variant<GC::Root<Web::DOM::Document>, GC::Root<Web::FileAPI::Blob>, GC::Root<WebIDL::BufferSource>, GC::Root<XHR::FormData>, GC::Root<Web::DOMURL::URLSearchParams>, AK::String>;
+using DocumentOrXMLHttpRequestBodyInit = FlattenVariant<Variant<GC::Ref<Web::DOM::Document>>, Fetch::XMLHttpRequestBodyInit>;
+using NullableDocumentOrXMLHttpRequestBodyInit = FlattenVariant<DocumentOrXMLHttpRequestBodyInit, Variant<Empty>>;
 
 class XMLHttpRequest final : public XMLHttpRequestEventTarget {
     WEB_PLATFORM_OBJECT(XMLHttpRequest, XMLHttpRequestEventTarget);
     GC_DECLARE_ALLOCATOR(XMLHttpRequest);
 
 public:
+    static constexpr bool OVERRIDES_MUST_SURVIVE_GARBAGE_COLLECTION = true;
+
     enum class State : u16 {
         Unsent = 0,
         Opened = 1,
@@ -56,9 +61,9 @@ public:
 
     WebIDL::ExceptionOr<void> open(String const& method, String const& url);
     WebIDL::ExceptionOr<void> open(String const& method, String const& url, bool async, Optional<String> const& username = Optional<String> {}, Optional<String> const& password = Optional<String> {});
-    WebIDL::ExceptionOr<void> send(Optional<DocumentOrXMLHttpRequestBodyInit> body);
+    WebIDL::ExceptionOr<void> send(NullableDocumentOrXMLHttpRequestBodyInit body);
 
-    WebIDL::ExceptionOr<void> set_request_header(String const& header, String const& value);
+    WebIDL::ExceptionOr<void> set_request_header(String const& name, String const& value);
     WebIDL::ExceptionOr<void> set_response_type(Bindings::XMLHttpRequestResponseType);
 
     Optional<String> get_response_header(String const& name) const;
@@ -95,7 +100,9 @@ private:
     WebIDL::ExceptionOr<void> handle_errors();
     JS::ThrowCompletionOr<void> request_error_steps(FlyString const& event_name, GC::Ptr<WebIDL::DOMException> exception = nullptr);
 
-    XMLHttpRequest(JS::Realm&, XMLHttpRequestUpload&, Fetch::Infrastructure::HeaderList&, Fetch::Infrastructure::Response&, Fetch::Infrastructure::FetchController&);
+    void stop_timeout_timer();
+
+    XMLHttpRequest(JS::Realm&, XMLHttpRequestUpload&, NonnullRefPtr<HTTP::HeaderList>, Fetch::Infrastructure::Response&, Fetch::Infrastructure::FetchController&);
 
     // https://xhr.spec.whatwg.org/#upload-object
     // upload object
@@ -135,7 +142,7 @@ private:
     // https://xhr.spec.whatwg.org/#author-request-headers
     // author request headers
     //     A header list, initially empty.
-    GC::Ref<Fetch::Infrastructure::HeaderList> m_author_request_headers;
+    NonnullRefPtr<HTTP::HeaderList> m_author_request_headers;
 
     // https://xhr.spec.whatwg.org/#request-body
     // request body
@@ -201,6 +208,10 @@ private:
 
     // Non-standard, see async path in `send()`
     u64 m_request_body_transmitted { 0 };
+    Optional<MonotonicTime> m_last_upload_progress_timestamp;
+    Optional<MonotonicTime> m_last_download_progress_timestamp;
+
+    GC::Ptr<Platform::Timer> m_timeout_timer;
 };
 
 }

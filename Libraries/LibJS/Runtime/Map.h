@@ -34,6 +34,8 @@ public:
     void map_set(Value const&, Value);
     size_t map_size() const;
 
+    virtual size_t external_memory_size() const override;
+
     struct EndIterator {
     };
 
@@ -65,6 +67,11 @@ public:
 
         bool operator==(IteratorImpl const& other) const { return m_index == other.m_index && &m_map == &other.m_map; }
         bool operator==(EndIterator const&) const { return is_end(); }
+
+        void visit_edges(Cell::Visitor& visitor)
+        {
+            visitor.visit(m_map);
+        }
 
     private:
         friend class Map;
@@ -112,6 +119,8 @@ public:
 private:
     explicit Map(Object& prototype);
     virtual void visit_edges(Visitor& visitor) override;
+
+    void account_external_memory_change(size_t old_external_memory_size);
 
     size_t m_next_insertion_id { 0 };
     RedBlackTree<size_t, Value> m_keys;

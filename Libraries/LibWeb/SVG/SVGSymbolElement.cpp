@@ -5,15 +5,11 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/Bindings/SVGSymbolElementPrototype.h>
+#include <LibWeb/Bindings/SVGSymbolElement.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
-#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
-#include <LibWeb/CSS/StyleValues/ShorthandStyleValue.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/Layout/SVGGraphicsBox.h>
-#include <LibWeb/SVG/AttributeNames.h>
-#include <LibWeb/SVG/SVGAnimatedRect.h>
 #include <LibWeb/SVG/SVGSymbolElement.h>
 #include <LibWeb/SVG/SVGUseElement.h>
 
@@ -39,8 +35,10 @@ void SVGSymbolElement::visit_edges(Cell::Visitor& visitor)
     SVGFitToViewBox::visit_edges(visitor);
 }
 
-void SVGSymbolElement::adjust_computed_style(CSS::ComputedProperties& computed_properties)
+void SVGSymbolElement::adjust_computed_style(CSS::ComputedProperties::Builder& computed_properties)
 {
+    Base::adjust_computed_style(computed_properties);
+
     if (is_direct_child_of_use_shadow_tree()) {
         // The generated instance of a ‘symbol’ that is the direct referenced element of a ‘use’ element must always have a computed value of inline for the display property.
         computed_properties.set_property(CSS::PropertyID::Display, CSS::DisplayStyleValue::create(CSS::Display::from_short(CSS::Display::Short::Inline)));
@@ -64,9 +62,14 @@ bool SVGSymbolElement::is_direct_child_of_use_shadow_tree() const
     return is<SVGUseElement>(host);
 }
 
-GC::Ptr<Layout::Node> SVGSymbolElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
+RefPtr<Layout::Node> SVGSymbolElement::create_layout_node(CSS::ComputedProperties const& style)
 {
-    return heap().allocate<Layout::SVGGraphicsBox>(document(), *this, move(style));
+    // https://svgwg.org/svg2-draft/render.html#TermNeverRenderedElement
+    // [..] it also includes a ‘symbol’ element that is not the instance root of a use-element shadow tree.
+    if (!is_direct_child_of_use_shadow_tree())
+        return {};
+
+    return make_ref_counted<Layout::SVGGraphicsBox>(document(), *this, style);
 }
 
 }

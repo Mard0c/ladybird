@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/Bindings/DOMParserPrototype.h>
+#include <LibWeb/Bindings/DOMParser.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/XMLDocument.h>
 #include <LibWeb/HTML/DOMParser.h>
@@ -15,6 +15,7 @@
 #include <LibWeb/TrustedTypes/RequireTrustedTypesForDirective.h>
 #include <LibWeb/TrustedTypes/TrustedTypePolicy.h>
 #include <LibWeb/XML/XMLDocumentBuilder.h>
+#include <LibXML/Parser/Parser.h>
 
 namespace Web::HTML {
 
@@ -39,7 +40,7 @@ void DOMParser::initialize(JS::Realm& realm)
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-domparser-parsefromstring
-WebIDL::ExceptionOr<GC::Root<DOM::Document>> DOMParser::parse_from_string(Utf16String string, Bindings::DOMParserSupportedType type)
+WebIDL::ExceptionOr<GC::Ref<DOM::Document>> DOMParser::parse_from_string(TrustedTypes::TrustedHTMLOrString string, Bindings::DOMParserSupportedType type)
 {
     // 1. Let compliantString to the result of invoking the Get Trusted Type compliant string algorithm with
     //    TrustedHTML, this's relevant global object, string, "DOMParser parseFromString", and "script".
@@ -58,7 +59,7 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> DOMParser::parse_from_string(Utf16S
     if (type == Bindings::DOMParserSupportedType::Text_Html) {
         // -> "text/html"
         document = HTML::HTMLDocument::create(realm(), associated_document.url());
-        document->set_content_type(Bindings::idl_enum_to_string(type));
+        document->set_content_type("text/html"_string);
         document->set_document_type(DOM::Document::Type::HTML);
 
         // 1. Parse HTML from a string given document and compliantString.
@@ -66,12 +67,27 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> DOMParser::parse_from_string(Utf16S
     } else {
         // -> Otherwise
         document = DOM::Document::create(realm(), associated_document.url());
-        document->set_content_type(Bindings::idl_enum_to_string(type));
+        switch (type) {
+        case Bindings::DOMParserSupportedType::Text_Xml:
+            document->set_content_type("text/xml"_string);
+            break;
+        case Bindings::DOMParserSupportedType::Application_Xml:
+            document->set_content_type("application/xml"_string);
+            break;
+        case Bindings::DOMParserSupportedType::Application_XhtmlXml:
+            document->set_content_type("application/xhtml+xml"_string);
+            break;
+        case Bindings::DOMParserSupportedType::Image_SvgXml:
+            document->set_content_type("image/svg+xml"_string);
+            break;
+        case Bindings::DOMParserSupportedType::Text_Html:
+            VERIFY_NOT_REACHED();
+        }
         document->set_document_type(DOM::Document::Type::XML);
 
         // 1. Create an XML parser parse, associated with document, and with XML scripting support disabled.
         auto const utf8_complaint_string = compliant_string.to_utf8_but_should_be_ported_to_utf16();
-        XML::Parser parser(utf8_complaint_string, { .resolve_external_resource = resolve_xml_resource });
+        XML::Parser parser(utf8_complaint_string, { .resolve_named_html_entity = resolve_named_html_entity });
         XMLDocumentBuilder builder { *document, XMLScriptingSupport::Disabled };
         // 2. Parse compliantString using parser.
         auto result = parser.parse_with_listener(builder);
@@ -94,7 +110,7 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> DOMParser::parse_from_string(Utf16S
     document->set_origin(associated_document.origin());
 
     // 3. Return document.
-    return document;
+    return GC::Ref { *document };
 }
 
 }

@@ -12,21 +12,87 @@
 
 namespace Web::CSS::Parser {
 
-String Declaration::to_string() const
+ComponentValueToken::ComponentValueToken(Token const& token)
+    : m_type(token.type())
+    , m_original_source_text(token.original_source_text())
+    , m_start_position(token.start_position())
+    , m_end_position(token.end_position())
 {
-    if (original_text.has_value())
-        return original_text.value();
+}
 
-    StringBuilder builder;
+Token::Type ComponentValueToken::mirror_variant() const
+{
+    if (is(Token::Type::OpenCurly)) {
+        return Token::Type::CloseCurly;
+    }
 
-    serialize_an_identifier(builder, name);
-    builder.append(": "sv);
-    builder.join(' ', value);
+    if (is(Token::Type::OpenSquare)) {
+        return Token::Type::CloseSquare;
+    }
 
-    if (important == Important::Yes)
-        builder.append(" !important"sv);
+    if (is(Token::Type::OpenParen)) {
+        return Token::Type::CloseParen;
+    }
 
-    return MUST(builder.to_string());
+    return Token::Type::Invalid;
+}
+
+StringView ComponentValueToken::bracket_string() const
+{
+    if (is(Token::Type::OpenCurly)) {
+        return "{"sv;
+    }
+
+    if (is(Token::Type::CloseCurly)) {
+        return "}"sv;
+    }
+
+    if (is(Token::Type::OpenSquare)) {
+        return "["sv;
+    }
+
+    if (is(Token::Type::CloseSquare)) {
+        return "]"sv;
+    }
+
+    if (is(Token::Type::OpenParen)) {
+        return "("sv;
+    }
+
+    if (is(Token::Type::CloseParen)) {
+        return ")"sv;
+    }
+
+    return ""sv;
+}
+
+StringView ComponentValueToken::bracket_mirror_string() const
+{
+    if (is(Token::Type::OpenCurly)) {
+        return "}"sv;
+    }
+
+    if (is(Token::Type::CloseCurly)) {
+        return "{"sv;
+    }
+
+    if (is(Token::Type::OpenSquare)) {
+        return "]"sv;
+    }
+
+    if (is(Token::Type::CloseSquare)) {
+        return "["sv;
+    }
+
+    if (is(Token::Type::OpenParen)) {
+        return ")"sv;
+    }
+
+    if (is(Token::Type::CloseParen)) {
+        return "("sv;
+    }
+
+    return ""sv;
 }
 
 String SimpleBlock::to_string() const
@@ -51,16 +117,6 @@ String SimpleBlock::original_source_text() const
     return builder.to_string_without_validation();
 }
 
-void SimpleBlock::contains_arbitrary_substitution_function(SubstitutionFunctionsPresence& presence) const
-{
-    for (auto const& component_value : value) {
-        if (component_value.is_function())
-            component_value.function().contains_arbitrary_substitution_function(presence);
-        if (component_value.is_block())
-            component_value.block().contains_arbitrary_substitution_function(presence);
-    }
-}
-
 String Function::to_string() const
 {
     StringBuilder builder;
@@ -83,22 +139,6 @@ String Function::original_source_text() const
     }
     builder.append(end_token.original_source_text());
     return builder.to_string_without_validation();
-}
-
-void Function::contains_arbitrary_substitution_function(SubstitutionFunctionsPresence& presence) const
-{
-    if (name.equals_ignoring_ascii_case("attr"sv))
-        presence.attr = true;
-    else if (name.equals_ignoring_ascii_case("env"sv))
-        presence.env = true;
-    else if (name.equals_ignoring_ascii_case("var"sv))
-        presence.var = true;
-    for (auto const& component_value : value) {
-        if (component_value.is_function())
-            component_value.function().contains_arbitrary_substitution_function(presence);
-        if (component_value.is_block())
-            component_value.block().contains_arbitrary_substitution_function(presence);
-    }
 }
 
 void AtRule::for_each(AtRuleVisitor&& visit_at_rule, QualifiedRuleVisitor&& visit_qualified_rule, DeclarationVisitor&& visit_declaration) const

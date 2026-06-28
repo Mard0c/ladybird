@@ -1,19 +1,22 @@
 /*
  * Copyright (c) 2021, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2026, Jelle Raaijmakers <jelle@ladybird.org>
  * Copyright (c) 2024, Tim Ledbetter <tim.ledbetter@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Utf16StringBuilder.h>
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Segmenter.h>
+#include <LibWeb/CSS/Invalidation/FormControlInvalidator.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/EditingHostManager.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/Position.h>
 #include <LibWeb/DOM/SelectionchangeEventDispatching.h>
 #include <LibWeb/GraphemeEdgeTracker.h>
+#include <LibWeb/HTML/CustomElements/CustomElementReactionNames.h>
 #include <LibWeb/HTML/Focus.h>
 #include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/HTMLButtonElement.h>
@@ -24,11 +27,13 @@
 #include <LibWeb/HTML/HTMLLegendElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/ValidityState.h>
 #include <LibWeb/Infra/Strings.h>
+#include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Painting/Paintable.h>
-#include <LibWeb/Selection/Selection.h>
+#include <LibWeb/UIEvents/InputTypes.h>
 
 namespace Web::HTML {
 
@@ -41,6 +46,43 @@ static SelectionDirection string_to_selection_direction(Optional<String> value)
     if (value.value() == "backward"sv)
         return SelectionDirection::Backward;
     return SelectionDirection::None;
+}
+
+// https://html.spec.whatwg.org/multipage/forms.html#form-associated-element
+bool FormAssociatedElement::is_form_associated_element() const
+{
+    return form_associated_element_to_html_element().is_form_associated_custom_element();
+}
+
+// https://html.spec.whatwg.org/multipage/forms.html#category-listed
+bool FormAssociatedElement::is_listed() const
+{
+    return form_associated_element_to_html_element().is_form_associated_custom_element();
+}
+
+// https://html.spec.whatwg.org/multipage/forms.html#category-submit
+bool FormAssociatedElement::is_submittable() const
+{
+    return form_associated_element_to_html_element().is_form_associated_custom_element();
+}
+
+// https://html.spec.whatwg.org/multipage/forms.html#category-reset
+bool FormAssociatedElement::is_resettable() const
+{
+    return form_associated_element_to_html_element().is_form_associated_custom_element();
+}
+
+// https://html.spec.whatwg.org/multipage/custom-elements.html#custom-elements-core-concepts%3Aconcept-form-reset-control
+void FormAssociatedElement::reset_algorithm()
+{
+    // The reset algorithm for form-associated custom elements is to enqueue a custom element callback reaction with
+    // the element, callback name "formResetCallback", and « ».
+    auto& html_element = form_associated_element_to_html_element();
+    if (!html_element.is_form_associated_custom_element())
+        return;
+
+    GC::RootVector<JS::Value> empty_arguments;
+    html_element.enqueue_a_custom_element_callback_reaction(CustomElementReactionNames::formResetCallback, move(empty_arguments));
 }
 
 void FormAssociatedElement::set_form(HTMLFormElement* form)
@@ -69,6 +111,9 @@ void FormAssociatedElement::set_custom_validity(String& error)
 
     // 2. Set the custom validity error message to error.
     m_custom_validity_error_message = error;
+
+    // AD-HOC: Setting a custom validity error changes which validity pseudo-classes match.
+    CSS::Invalidation::invalidate_style_after_validity_change(form_associated_element_to_html_element());
 }
 
 bool FormAssociatedElement::enabled() const
@@ -78,8 +123,7 @@ bool FormAssociatedElement::enabled() const
 
     // A form control is disabled if any of the following are true:
     // - The element is a button, input, select, textarea, or form-associated custom element, and the disabled attribute is specified on this element (regardless of its value); or
-    // FIXME: This doesn't check for form-associated custom elements.
-    if ((is<HTMLButtonElement>(html_element) || is<HTMLInputElement>(html_element) || is<HTMLSelectElement>(html_element) || is<HTMLTextAreaElement>(html_element)) && html_element.has_attribute(HTML::AttributeNames::disabled))
+    if ((is<HTMLButtonElement>(html_element) || is<HTMLInputElement>(html_element) || is<HTMLSelectElement>(html_element) || is<HTMLTextAreaElement>(html_element) || form_associated_element_to_html_element().is_form_associated_custom_element()) && html_element.has_attribute(HTML::AttributeNames::disabled))
         return false;
 
     // - The element is a descendant of a fieldset element whose disabled attribute is specified, and is not a descendant of that fieldset element's first legend element child, if any.
@@ -180,6 +224,14 @@ void FormAssociatedElement::reset_form_owner()
         return;
     }
 
+    // AD-HOC: The spec states:
+    //         - When the user agent resets the form owner of a form-associated custom element and doing so changes the
+    //           form owner, its formAssociatedCallback is called, given the new form owner (or null if no owner) as an
+    //           argument.
+    //         However, this is not specified as algorithmic steps, so we have to do this ourselves.
+    //         Spec issue: https://github.com/whatwg/html/issues/12169
+    GC::Ptr<HTMLFormElement> old_form { m_form.ptr() };
+
     // 3. Set element's form owner to null.
     set_form(nullptr);
 
@@ -187,9 +239,10 @@ void FormAssociatedElement::reset_form_owner()
     if (is_listed() && html_element.has_attribute(HTML::AttributeNames::form) && html_element.is_connected()) {
         // 1. If the first element in element's tree, in tree order, to have an ID that is identical to element's form content attribute's value, is a form element, then associate the element with that form element.
         auto form_value = html_element.attribute(HTML::AttributeNames::form);
-        html_element.root().for_each_in_inclusive_subtree_of_type<HTMLFormElement>([this, &form_value](HTMLFormElement& form_element) {
-            if (form_element.id() == form_value) {
-                set_form(&form_element);
+        html_element.root().for_each_in_inclusive_subtree_of_type<HTMLElement>([this, &form_value](auto& element) {
+            if (element.id() == form_value) {
+                if (is<HTMLFormElement>(element))
+                    set_form(as<HTMLFormElement>(&element));
                 return TraversalDecision::Break;
             }
 
@@ -203,6 +256,55 @@ void FormAssociatedElement::reset_form_owner()
         if (form_ancestor)
             set_form(form_ancestor);
     }
+
+    // See the AD-HOC comment above.
+    if (m_form != old_form && html_element.is_form_associated_custom_element()) {
+        GC::RootVector<JS::Value> arguments;
+        arguments.append(JS::Value(m_form.ptr()));
+        html_element.enqueue_a_custom_element_callback_reaction(CustomElementReactionNames::formAssociatedCallback, move(arguments));
+    }
+}
+
+void FormAssociatedElement::form_associated_element_was_inserted()
+{
+    update_face_disabled_state();
+}
+
+void FormAssociatedElement::form_associated_element_was_removed(DOM::Node*)
+{
+    update_face_disabled_state();
+}
+
+void FormAssociatedElement::form_associated_element_was_moved(GC::Ptr<DOM::Node>)
+{
+    update_face_disabled_state();
+}
+
+void FormAssociatedElement::form_associated_element_attribute_changed(FlyString const& name, Optional<String> const&, Optional<String> const&, Optional<FlyString> const&)
+{
+    if (name == HTML::AttributeNames::disabled)
+        update_face_disabled_state();
+}
+
+// AD-HOC: The specification states that when the disabled state of a form-associated custom element is changed,
+//         its formDisabledCallback should be enqueued. However, there are no explicit algorithmic steps for this
+//         outside of "upgrade an element". We track the disabled state and enqueue the callback when it changes.
+//         See: https://github.com/whatwg/html/issues/12169
+void FormAssociatedElement::update_face_disabled_state()
+{
+    auto& html_element = form_associated_element_to_html_element();
+    if (!html_element.is_form_associated_custom_element())
+        return;
+
+    bool is_disabled = !enabled();
+    if (is_disabled == m_face_disabled_state)
+        return;
+
+    m_face_disabled_state = is_disabled;
+
+    GC::RootVector<JS::Value> arguments;
+    arguments.append(JS::Value(is_disabled));
+    html_element.enqueue_a_custom_element_callback_reaction(CustomElementReactionNames::formDisabledCallback, move(arguments));
 }
 
 // https://w3c.github.io/webdriver/#dfn-clear-algorithm
@@ -224,8 +326,7 @@ String FormAssociatedElement::form_action() const
         return html_element.document().url_string();
     }
 
-    auto document_base_url = html_element.document().base_url();
-    if (auto maybe_url = document_base_url.complete_url(form_action_attribute.value()); maybe_url.has_value())
+    if (auto maybe_url = html_element.document().encoding_parse_url(form_action_attribute.value()); maybe_url.has_value())
         return maybe_url->to_string();
     return {};
 }
@@ -266,13 +367,18 @@ Utf16String FormAssociatedElement::validation_message() const
     if (!is_candidate_for_constraint_validation() || satisfies_its_constraints())
         return {};
 
-    // FIXME:
     // 2. Return a suitably localized message that the user agent would show the user if this were the only form
     //    control with a validity constraint problem. If the user agent would not actually show a textual message in
     //    such a situation (e.g., it would show a graphical cue instead), then return a suitably localized message that
-    //    expresses (one or more of) the validity constraint(s) that the control does not satisfy. If the element is a
-    //    candidate for constraint validation and is suffering from a custom error, then the custom validity error
-    //    message should be present in the return value.
+    //    expresses (one or more of) the validity constraint(s) that the control does not satisfy.
+
+    // If the element is a candidate for constraint validation and is suffering from a custom error, then
+    // the custom validity error message should be present in the return value.
+    if (suffering_from_a_custom_error()) {
+        return Utf16String::from_utf8(m_custom_validity_error_message);
+    }
+
+    // FIXME: Return more specific localized messages
     return "Invalid form"_utf16;
 }
 
@@ -305,7 +411,7 @@ bool FormAssociatedElement::report_validity_steps()
         // FIXME: Does this align with other browsers?
         if (report && element.check_visibility({})) {
             run_focusing_steps(&element);
-            DOM::ScrollIntoViewOptions scroll_options;
+            Bindings::ScrollIntoViewOptions scroll_options;
             scroll_options.block = Bindings::ScrollLogicalPosition::Nearest;
             scroll_options.inline_ = Bindings::ScrollLogicalPosition::Nearest;
             scroll_options.behavior = Bindings::ScrollBehavior::Instant;
@@ -381,6 +487,11 @@ bool FormAssociatedElement::is_candidate_for_constraint_validation() const
             return false;
     }
 
+    // https://html.spec.whatwg.org/multipage/custom-elements.html#custom-elements-core-concepts:barred-from-constraint-validation-2
+    // If the readonly attribute is specified on a form-associated custom element, the element is barred from constraint validation.
+    if (html_element.is_form_associated_custom_element() && html_element.has_attribute(HTML::AttributeNames::readonly))
+        return false;
+
     return true;
 }
 
@@ -412,18 +523,69 @@ bool FormAssociatedElement::novalidate_state() const
     return false;
 }
 
-// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#limiting-user-input-length%3A-the-maxlength-attribute%3Asuffering-from-being-too-long
-bool FormAssociatedElement::suffering_from_being_too_long() const
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-being-missing
+bool FormAssociatedElement::suffering_from_being_missing() const
 {
-    // FIXME: Implement this.
-    return false;
+    // When the setValidity() method sets valueMissing flag to true for a form-associated custom element.
+    return m_face_validity_flags.value_missing;
 }
 
-// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#setting-minimum-input-length-requirements%3A-the-minlength-attribute%3Asuffering-from-being-too-short
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-a-type-mismatch
+bool FormAssociatedElement::suffering_from_a_type_mismatch() const
+{
+    // When the setValidity() method sets typeMismatch flag to true for a form-associated custom element.
+    return m_face_validity_flags.type_mismatch;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-a-pattern-mismatch
+bool FormAssociatedElement::suffering_from_a_pattern_mismatch() const
+{
+    // When the setValidity() method sets patternMismatch flag to true for a form-associated custom element.
+    return m_face_validity_flags.pattern_mismatch;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-being-too-long
+bool FormAssociatedElement::suffering_from_being_too_long() const
+{
+    // When the setValidity() method sets tooLong flag to true for a form-associated custom element.
+    // FIXME: Implement this for non-FACEs.
+    return m_face_validity_flags.too_long;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-being-too-short
 bool FormAssociatedElement::suffering_from_being_too_short() const
 {
-    // FIXME: Implement this.
-    return false;
+    // When the setValidity() method sets tooShort flag to true for a form-associated custom element.
+    // FIXME: Implement this for non-FACEs.
+    return m_face_validity_flags.too_short;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-an-overflow
+bool FormAssociatedElement::suffering_from_an_underflow() const
+{
+    // When the setValidity() method sets rangeUnderflow flag to true for a form-associated custom element.
+    return m_face_validity_flags.range_underflow;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-an-overflow
+bool FormAssociatedElement::suffering_from_an_overflow() const
+{
+    // When the setValidity() method sets rangeOverflow flag to true for a form-associated custom element.
+    return m_face_validity_flags.range_overflow;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-a-step-mismatch
+bool FormAssociatedElement::suffering_from_a_step_mismatch() const
+{
+    // When the setValidity() method sets stepMismatch flag to true for a form-associated custom element.
+    return m_face_validity_flags.step_mismatch;
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-bad-input
+bool FormAssociatedElement::suffering_from_bad_input() const
+{
+    // When the setValidity() method sets badInput flag to true for a form-associated custom element.
+    return m_face_validity_flags.bad_input;
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#suffering-from-a-custom-error
@@ -432,6 +594,46 @@ bool FormAssociatedElement::suffering_from_a_custom_error() const
     // When a control's custom validity error message (as set by the element's setCustomValidity() method or ElementInternals's setValidity() method) is not the empty
     // string.
     return !m_custom_validity_error_message.is_empty();
+}
+
+void FormAssociatedElement::set_face_validity_flags(Badge<ElementInternals>, Bindings::ValidityStateFlags const& value)
+{
+    m_face_validity_flags = value;
+}
+
+void FormAssociatedElement::set_face_validation_message(Badge<ElementInternals>, String const& value)
+{
+    m_face_validation_message = value;
+}
+
+void FormAssociatedElement::set_face_validation_anchor(Badge<ElementInternals>, GC::Ptr<HTMLElement> value)
+{
+    m_face_validation_anchor = value;
+}
+
+void FormAssociatedElement::set_face_submission_value(Badge<ElementInternals>, FACESubmissionValue const& value)
+{
+    m_face_submission_value = value;
+}
+
+void FormAssociatedElement::set_face_state(Badge<ElementInternals>, FACESubmissionValue const& value)
+{
+    m_face_state = value;
+}
+
+void FormAssociatedElement::visit_edges(JS::Cell::Visitor& visitor)
+{
+    m_face_submission_value.visit(
+        [&visitor](GC::Ref<FileAPI::File> file) {
+            visitor.visit(file);
+        },
+        [](auto&) {});
+
+    m_face_state.visit(
+        [&visitor](GC::Ref<FileAPI::File> file) {
+            visitor.visit(file);
+        },
+        [](auto&) {});
 }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-textarea/input-relevant-value
@@ -471,7 +673,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::select()
 {
     // 1. If this element is an input element, and either select() does not apply to this element
     //    or the corresponding control has no selectable text, return.
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto& input_element = static_cast<HTMLInputElement&>(html_element);
         if (!input_element.select_applies() || !input_element.has_selectable_text())
@@ -487,7 +689,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::select()
 Optional<WebIDL::UnsignedLong> FormAssociatedTextControlElement::selection_start_binding() const
 {
     // 1. If this element is an input element, and selectionStart does not apply to this element, return null.
-    auto const& html_element = form_associated_element_to_html_element();
+    auto const& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto const& input_element = static_cast<HTMLInputElement const&>(html_element);
         if (!input_element.selection_or_range_applies())
@@ -515,7 +717,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_selection_start_
 {
     // 1. If this element is an input element, and selectionStart does not apply to this element,
     //    throw an "InvalidStateError" DOMException.
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto& input_element = static_cast<HTMLInputElement&>(html_element);
         if (!input_element.selection_or_range_applies())
@@ -540,7 +742,7 @@ Optional<WebIDL::UnsignedLong> FormAssociatedTextControlElement::selection_end_b
 {
     // 1. If this element is an input element, and selectionEnd does not apply to this element, return
     //    null.
-    auto const& html_element = form_associated_element_to_html_element();
+    auto const& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto const& input_element = static_cast<HTMLInputElement const&>(html_element);
         if (!input_element.selection_or_range_applies())
@@ -568,7 +770,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_selection_end_bi
 {
     // 1. If this element is an input element, and selectionEnd does not apply to this element,
     //    throw an "InvalidStateError" DOMException.
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto& input_element = static_cast<HTMLInputElement&>(html_element);
         if (!input_element.selection_or_range_applies())
@@ -586,7 +788,7 @@ Optional<String> FormAssociatedTextControlElement::selection_direction() const
 {
     // 1. If this element is an input element, and selectionDirection does not apply to this
     //    element, return null.
-    auto const& html_element = form_associated_element_to_html_element();
+    auto const& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto const& input_element = static_cast<HTMLInputElement const&>(html_element);
         if (!input_element.selection_or_range_applies())
@@ -621,7 +823,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_selection_direct
 {
     // 1. If this element is an input element, and selectionDirection does not apply to this element,
     //    throw an "InvalidStateError" DOMException.
-    auto const& html_element = form_associated_element_to_html_element();
+    auto const& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element)) {
         auto const& input_element = static_cast<HTMLInputElement const&>(html_element);
         if (!input_element.selection_direction_applies())
@@ -641,7 +843,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_range_text_bindi
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-setrangetext
 WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_range_text_binding(Utf16String const& replacement, WebIDL::UnsignedLong start, WebIDL::UnsignedLong end, Bindings::SelectionMode selection_mode)
 {
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
 
     // 1. If this element is an input element, and setRangeText() does not apply to this element,
     //    throw an "InvalidStateError" DOMException.
@@ -654,7 +856,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_range_text_bindi
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-textarea/input-setrangetext
 WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_range_text(Utf16String const& replacement, WebIDL::UnsignedLong start, WebIDL::UnsignedLong end, Bindings::SelectionMode selection_mode)
 {
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
 
     // 2. Set this element's dirty value flag to true.
     set_dirty_value_flag(true);
@@ -686,20 +888,20 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_range_text(Utf16
     // 9. If start is less than end, delete the sequence of code units within the element's relevant value starting with
     //    the code unit at the startth position and ending with the code unit at the (end-1)th position.
     if (start < end) {
-        StringBuilder builder(StringBuilder::Mode::UTF16, the_relevant_value.length_in_code_units() - (end - start));
+        Utf16StringBuilder builder(the_relevant_value.length_in_code_units() - (end - start));
         builder.append(the_relevant_value.substring_view(0, start));
         builder.append(the_relevant_value.substring_view(end));
 
-        the_relevant_value = builder.to_utf16_string();
+        the_relevant_value = builder.to_string();
     }
 
     // 10. Insert the value of the first argument into the text of the relevant value of the text control, immediately before the startth code unit.
-    StringBuilder builder(StringBuilder::Mode::UTF16, the_relevant_value.length_in_code_units() + replacement.length_in_code_units());
+    Utf16StringBuilder builder(the_relevant_value.length_in_code_units() + replacement.length_in_code_units());
     builder.append(the_relevant_value.substring_view(0, start));
     builder.append(replacement);
     builder.append(the_relevant_value.substring_view(start));
 
-    the_relevant_value = builder.to_utf16_string();
+    the_relevant_value = builder.to_string();
     TRY(set_relevant_value(the_relevant_value));
 
     // 11. Let new length be the length of the value of the first argument.
@@ -770,7 +972,7 @@ WebIDL::ExceptionOr<void> FormAssociatedTextControlElement::set_selection_range(
 {
     // 1. If this element is an input element, and setSelectionRange() does not apply to this
     //    element, throw an "InvalidStateError" DOMException.
-    auto& html_element = form_associated_element_to_html_element();
+    auto& html_element = text_control_to_html_element();
     if (is<HTMLInputElement>(html_element) && !static_cast<HTMLInputElement&>(html_element).selection_or_range_applies())
         return WebIDL::InvalidStateError::create(html_element.realm(), "setSelectionRange does not apply to this input type"_utf16);
 
@@ -822,7 +1024,7 @@ void FormAssociatedTextControlElement::set_the_selection_range(Optional<WebIDL::
     //    given the element to fire an event named select at the element, with the bubbles attribute
     //    initialized to true.
     if (was_modified) {
-        auto& html_element = form_associated_element_to_html_element();
+        auto& html_element = text_control_to_html_element();
 
         // AD-HOC: We don't fire the event if the user moves the cursor without selecting any text.
         //         This is not in the spec but matches how other browsers behave.
@@ -833,14 +1035,14 @@ void FormAssociatedTextControlElement::set_the_selection_range(Optional<WebIDL::
             });
         }
 
-        selection_was_changed();
+        selection_was_changed(source);
     }
 }
 
-void FormAssociatedTextControlElement::handle_insert(Utf16String const& data)
+void FormAssociatedTextControlElement::handle_insert(FlyString const& input_type, Utf16String const& data)
 {
     auto text_node = form_associated_element_to_text_node();
-    if (!text_node || !is_mutable())
+    if (!text_node || !static_cast<FormAssociatedElement&>(text_control_to_html_element()).is_mutable())
         return;
 
     auto data_for_insertion = data;
@@ -856,20 +1058,28 @@ void FormAssociatedTextControlElement::handle_insert(Utf16String const& data)
     MUST(set_range_text(data_for_insertion, selection_start, selection_end, Bindings::SelectionMode::End));
 
     text_node->invalidate_style(DOM::StyleInvalidationReason::EditingInsertion);
-    did_edit_text_node();
+
+    // The input event's data attribute is only set for certain input types according to:
+    // https://w3c.github.io/input-events/#overview
+    Optional<Utf16String> data_for_input_event;
+    if (first_is_one_of(input_type, UIEvents::InputTypes::insertText, UIEvents::InputTypes::insertFromPaste))
+        data_for_input_event = data_for_insertion;
+
+    did_edit_text_node(input_type, data_for_input_event);
+    scroll_cursor_into_view();
 }
 
-void FormAssociatedTextControlElement::handle_delete(DeleteDirection direction)
+void FormAssociatedTextControlElement::handle_delete(FlyString const& input_type)
 {
     auto text_node = form_associated_element_to_text_node();
-    if (!text_node || !is_mutable())
+    if (!text_node || !static_cast<FormAssociatedElement&>(text_control_to_html_element()).is_mutable())
         return;
 
     auto selection_start = this->selection_start();
     auto selection_end = this->selection_end();
 
     if (selection_start == selection_end) {
-        if (direction == DeleteDirection::Backward) {
+        if (input_type == UIEvents::InputTypes::deleteContentBackward) {
             if (auto offset = text_node->grapheme_segmenter().previous_boundary(m_selection_end); offset.has_value())
                 selection_start = *offset;
         } else {
@@ -881,21 +1091,20 @@ void FormAssociatedTextControlElement::handle_delete(DeleteDirection direction)
     MUST(set_range_text({}, selection_start, selection_end, Bindings::SelectionMode::End));
 
     text_node->invalidate_style(DOM::StyleInvalidationReason::EditingDeletion);
-    did_edit_text_node();
+    did_edit_text_node(input_type, {});
+    scroll_cursor_into_view();
 }
 
-EventResult FormAssociatedTextControlElement::handle_return_key(FlyString const&)
+Optional<Utf16String> FormAssociatedTextControlElement::selected_text_for_stringifier() const
 {
-    auto* input_element = as_if<HTMLInputElement>(form_associated_element_to_html_element());
-    if (!input_element)
-        return EventResult::Dropped;
+    // https://w3c.github.io/selection-api/#dom-selection-stringifier
+    // Used for clipboard copy and window.getSelection().toString() when this element is active.
+    size_t start = this->selection_start();
+    size_t end = this->selection_end();
+    if (start >= end)
+        return {};
 
-    if (auto* form = input_element->form())
-        form->implicitly_submit_form().release_value_but_fixme_should_propagate_errors();
-    else
-        input_element->commit_pending_changes();
-
-    return EventResult::Handled;
+    return Utf16String::from_utf16(relevant_value().substring_view(start, end - start));
 }
 
 void FormAssociatedTextControlElement::collapse_selection_to_offset(size_t position)
@@ -904,13 +1113,29 @@ void FormAssociatedTextControlElement::collapse_selection_to_offset(size_t posit
     m_selection_end = position;
 }
 
-void FormAssociatedTextControlElement::selection_was_changed()
+void FormAssociatedTextControlElement::scroll_cursor_into_view()
 {
-    auto& element = form_associated_element_to_html_element();
-    if (is<HTML::HTMLInputElement>(element)) {
-        schedule_a_selectionchange_event(static_cast<HTML::HTMLInputElement&>(element), element.document());
-    } else if (is<HTML::HTMLTextAreaElement>(element)) {
-        schedule_a_selectionchange_event(static_cast<HTML::HTMLTextAreaElement&>(element), element.document());
+    auto& element = text_control_to_html_element();
+    element.document().update_layout(DOM::UpdateLayoutReason::ScrollCursorIntoView);
+
+    auto text_node = form_associated_element_to_text_node();
+    if (!text_node)
+        return;
+
+    auto paintable = text_node->paintable();
+    if (!paintable)
+        return;
+
+    paintable->scroll_ancestor_to_offset_into_view(m_selection_end);
+}
+
+void FormAssociatedTextControlElement::selection_was_changed(SelectionSource source)
+{
+    auto& element = text_control_to_html_element();
+    if (auto* input_element = as_if<HTMLInputElement>(element)) {
+        schedule_a_selectionchange_event(*input_element, element.document());
+    } else if (auto* text_area_element = as_if<HTMLTextAreaElement>(element)) {
+        schedule_a_selectionchange_event(*text_area_element, element.document());
     } else {
         VERIFY_NOT_REACHED();
     }
@@ -918,16 +1143,27 @@ void FormAssociatedTextControlElement::selection_was_changed()
     auto text_node = form_associated_element_to_text_node();
     if (!text_node)
         return;
-    auto* text_paintable = text_node->paintable();
+    // NB: Called during selection change handling, layout may be stale.
+    auto text_paintable = text_node->unsafe_paintable();
     if (!text_paintable)
         return;
+
     if (m_selection_start == m_selection_end) {
         text_paintable->set_selection_state(Painting::Paintable::SelectionState::None);
         text_node->document().reset_cursor_blink_cycle();
     } else {
         text_paintable->set_selection_state(Painting::Paintable::SelectionState::StartAndEnd);
     }
-    text_paintable->set_needs_display();
+    text_paintable->set_needs_repaint();
+
+    // AD-HOC: Only scroll the cursor into view for UI-driven selection changes (like keyboard input). Programmatic
+    //         changes (input.value, setSelectionRange) do not cause the cursor to scroll into view. This matches the
+    //         behavior of other browsers.
+    if (source == SelectionSource::UI) {
+        auto navigable = element.document().navigable();
+        if (navigable && !navigable->event_handler().is_handling_mouse_selection())
+            scroll_cursor_into_view();
+    }
 }
 
 void FormAssociatedTextControlElement::select_all()
@@ -936,29 +1172,29 @@ void FormAssociatedTextControlElement::select_all()
     if (!text_node)
         return;
     set_the_selection_range(0, text_node->length());
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::set_selection_anchor(GC::Ref<DOM::Node> anchor_node, size_t anchor_offset)
 {
-    auto editing_host_manager = form_associated_element_to_html_element().document().editing_host_manager();
+    auto editing_host_manager = text_control_to_html_element().document().editing_host_manager();
     editing_host_manager->set_selection_anchor(anchor_node, anchor_offset);
     auto text_node = form_associated_element_to_text_node();
     if (!text_node || anchor_node != text_node)
         return;
     collapse_selection_to_offset(anchor_offset);
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::set_selection_focus(GC::Ref<DOM::Node> focus_node, size_t focus_offset)
 {
-    auto editing_host_manager = form_associated_element_to_html_element().document().editing_host_manager();
+    auto editing_host_manager = text_control_to_html_element().document().editing_host_manager();
     editing_host_manager->set_selection_focus(focus_node, focus_offset);
     auto text_node = form_associated_element_to_text_node();
     if (!text_node || focus_node != text_node)
         return;
     m_selection_end = focus_offset;
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::move_cursor_to_start(CollapseSelection collapse)
@@ -971,7 +1207,7 @@ void FormAssociatedTextControlElement::move_cursor_to_start(CollapseSelection co
     } else {
         m_selection_end = 0;
     }
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::move_cursor_to_end(CollapseSelection collapse)
@@ -984,7 +1220,35 @@ void FormAssociatedTextControlElement::move_cursor_to_end(CollapseSelection coll
     } else {
         m_selection_end = text_node->length();
     }
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
+}
+
+void FormAssociatedTextControlElement::move_cursor_to_start_of_current_line(CollapseSelection collapse)
+{
+    auto text_node = form_associated_element_to_text_node();
+    if (!text_node)
+        return;
+    auto new_offset = find_line_start(text_node->data().utf16_view(), m_selection_end);
+    if (collapse == CollapseSelection::Yes) {
+        collapse_selection_to_offset(new_offset);
+    } else {
+        m_selection_end = new_offset;
+    }
+    selection_was_changed(SelectionSource::UI);
+}
+
+void FormAssociatedTextControlElement::move_cursor_to_end_of_current_line(CollapseSelection collapse)
+{
+    auto text_node = form_associated_element_to_text_node();
+    if (!text_node)
+        return;
+    auto new_offset = find_line_end(text_node->data().utf16_view(), m_selection_end);
+    if (collapse == CollapseSelection::Yes) {
+        collapse_selection_to_offset(new_offset);
+    } else {
+        m_selection_end = new_offset;
+    }
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::increment_cursor_position_offset(CollapseSelection collapse)
@@ -992,14 +1256,19 @@ void FormAssociatedTextControlElement::increment_cursor_position_offset(Collapse
     auto const text_node = form_associated_element_to_text_node();
     if (!text_node)
         return;
-    if (auto offset = text_node->grapheme_segmenter().next_boundary(m_selection_end); offset.has_value()) {
+    // If there is a selection range, collapse to the end (max) of that range without moving forward
+    if (collapse == CollapseSelection::Yes && (m_selection_start != m_selection_end)) {
+        collapse_selection_to_offset(max(m_selection_start, m_selection_end));
+    }
+    // Otherwise, move forward if possible
+    else if (auto offset = text_node->grapheme_segmenter().next_boundary(m_selection_end); offset.has_value()) {
         if (collapse == CollapseSelection::Yes) {
             collapse_selection_to_offset(*offset);
         } else {
             m_selection_end = *offset;
         }
     }
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::decrement_cursor_position_offset(CollapseSelection collapse)
@@ -1007,14 +1276,19 @@ void FormAssociatedTextControlElement::decrement_cursor_position_offset(Collapse
     auto const text_node = form_associated_element_to_text_node();
     if (!text_node)
         return;
-    if (auto offset = text_node->grapheme_segmenter().previous_boundary(m_selection_end); offset.has_value()) {
+    // If there is a selection range, collapse to the start (min) of that range without moving backward
+    if (collapse == CollapseSelection::Yes && (m_selection_start != m_selection_end)) {
+        collapse_selection_to_offset(min(m_selection_start, m_selection_end));
+    }
+    // Otherwise, move backward if possible
+    else if (auto offset = text_node->grapheme_segmenter().previous_boundary(m_selection_end); offset.has_value()) {
         if (collapse == CollapseSelection::Yes) {
             collapse_selection_to_offset(*offset);
         } else {
             m_selection_end = *offset;
         }
     }
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::increment_cursor_position_to_next_word(CollapseSelection collapse)
@@ -1037,7 +1311,7 @@ void FormAssociatedTextControlElement::increment_cursor_position_to_next_word(Co
         break;
     }
 
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::decrement_cursor_position_to_previous_word(CollapseSelection collapse)
@@ -1060,7 +1334,7 @@ void FormAssociatedTextControlElement::decrement_cursor_position_to_previous_wor
         break;
     }
 
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::increment_cursor_position_to_next_line(CollapseSelection collapse)
@@ -1078,7 +1352,7 @@ void FormAssociatedTextControlElement::increment_cursor_position_to_next_line(Co
     else
         m_selection_end = *new_offset;
 
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 void FormAssociatedTextControlElement::decrement_cursor_position_to_previous_line(CollapseSelection collapse)
@@ -1096,22 +1370,42 @@ void FormAssociatedTextControlElement::decrement_cursor_position_to_previous_lin
     else
         m_selection_end = *new_offset;
 
-    selection_was_changed();
+    selection_was_changed(SelectionSource::UI);
 }
 
 GC::Ptr<DOM::Position> FormAssociatedTextControlElement::cursor_position() const
 {
-    auto const node = form_associated_element_to_text_node();
+    auto node = form_associated_element_to_text_node();
     if (!node)
         return nullptr;
-    if (m_selection_start == m_selection_end)
-        return DOM::Position::create(node->realm(), const_cast<DOM::Text&>(*node), m_selection_start);
-    return nullptr;
+    if (m_selection_start != m_selection_end)
+        return nullptr;
+    return DOM::Position::create(node->realm(), const_cast<DOM::Text&>(*node), m_selection_start);
 }
 
 GC::Ref<JS::Cell> FormAssociatedTextControlElement::as_cell()
 {
-    return form_associated_element_to_html_element();
+    return text_control_to_html_element();
+}
+
+}
+
+namespace Web::DOM {
+
+template<>
+HTML::FormAssociatedTextControlElement* Node::fast_as<HTML::FormAssociatedTextControlElement>()
+{
+    if (auto* input = as_if<HTML::HTMLInputElement>(*this))
+        return input;
+    if (auto* textarea = as_if<HTML::HTMLTextAreaElement>(*this))
+        return textarea;
+    return nullptr;
+}
+
+template<>
+HTML::FormAssociatedTextControlElement const* Node::fast_as<HTML::FormAssociatedTextControlElement>() const
+{
+    return const_cast<Node&>(*this).fast_as<HTML::FormAssociatedTextControlElement>();
 }
 
 }

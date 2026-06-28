@@ -7,10 +7,11 @@
 #include <LibJS/Runtime/Completion.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
-#include <LibWeb/Bindings/ResponsePrototype.h>
+#include <LibWeb/Bindings/Response.h>
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Fetch/Enums.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Statuses.h>
 #include <LibWeb/Fetch/Response.h>
@@ -48,7 +49,7 @@ Optional<MimeSniff::MimeType> Response::mime_type_impl() const
 {
     // Objects including the Body interface mixin need to define an associated MIME type algorithm which takes no arguments and returns failure or a MIME type.
     // A Response object’s MIME type is to return the result of extracting a MIME type from its response’s header list.
-    return m_response->header_list()->extract_mime_type();
+    return Infrastructure::extract_mime_type(m_response->header_list());
 }
 
 // https://fetch.spec.whatwg.org/#concept-body-body
@@ -97,7 +98,7 @@ static bool is_valid_status_text(String const& status_text)
 }
 
 // https://fetch.spec.whatwg.org/#initialize-a-response
-WebIDL::ExceptionOr<void> Response::initialize_response(ResponseInit const& init, Optional<Infrastructure::BodyWithType> const& body)
+WebIDL::ExceptionOr<void> Response::initialize_response(Bindings::ResponseInit const& init, Optional<Infrastructure::BodyWithType> const& body)
 {
     // 1. If init["status"] is not in the range 200 to 599, inclusive, then throw a RangeError.
     if (init.status < 200 || init.status > 599)
@@ -111,7 +112,7 @@ WebIDL::ExceptionOr<void> Response::initialize_response(ResponseInit const& init
     m_response->set_status(init.status);
 
     // 4. Set response’s response’s status message to init["statusText"].
-    m_response->set_status_message(MUST(ByteBuffer::copy(init.status_text.bytes())));
+    m_response->set_status_message(init.status_text.to_byte_string());
 
     // 5. If init["headers"] exists, then fill response’s headers with init["headers"].
     if (init.headers.has_value())
@@ -127,20 +128,15 @@ WebIDL::ExceptionOr<void> Response::initialize_response(ResponseInit const& init
         m_response->set_body(body->body);
 
         // 3. If body’s type is non-null and response’s header list does not contain `Content-Type`, then append (`Content-Type`, body’s type) to response’s header list.
-        if (body->type.has_value() && !m_response->header_list()->contains("Content-Type"sv.bytes())) {
-            auto header = Infrastructure::Header {
-                .name = MUST(ByteBuffer::copy("Content-Type"sv.bytes())),
-                .value = MUST(ByteBuffer::copy(body->type->span())),
-            };
-            m_response->header_list()->append(move(header));
-        }
+        if (body->type.has_value() && !m_response->header_list()->contains("Content-Type"sv))
+            m_response->header_list()->append({ "Content-Type"sv, *body->type });
     }
 
     return {};
 }
 
 // https://fetch.spec.whatwg.org/#dom-response
-WebIDL::ExceptionOr<GC::Ref<Response>> Response::construct_impl(JS::Realm& realm, Optional<BodyInit> const& body, ResponseInit const& init)
+WebIDL::ExceptionOr<GC::Ref<Response>> Response::construct_impl(JS::Realm& realm, NullableBodyInit const& body, Bindings::ResponseInit const& init)
 {
     auto& vm = realm.vm();
 
@@ -159,8 +155,8 @@ WebIDL::ExceptionOr<GC::Ref<Response>> Response::construct_impl(JS::Realm& realm
     Optional<Infrastructure::BodyWithType> body_with_type;
 
     // 4. If body is non-null, then set bodyWithType to the result of extracting body.
-    if (body.has_value())
-        body_with_type = TRY(extract_body(realm, *body));
+    if (!body.has<Empty>())
+        body_with_type = TRY(extract_body(realm, body.downcast<BodyInit>()));
 
     // 5. Perform initialize a response given this, init, and bodyWithType.
     TRY(response_object->initialize_response(init, body_with_type));
@@ -182,7 +178,7 @@ WebIDL::ExceptionOr<GC::Ref<Response>> Response::redirect(JS::VM& vm, String con
     auto& realm = *vm.current_realm();
 
     // 1. Let parsedURL be the result of parsing url with current settings object’s API base URL.
-    auto api_base_url = HTML::current_principal_settings_object().api_base_url();
+    auto api_base_url = HTML::current_settings_object().api_base_url();
     auto parsed_url = DOMURL::parse(url, api_base_url);
 
     // 2. If parsedURL is failure, then throw a TypeError.
@@ -204,7 +200,7 @@ WebIDL::ExceptionOr<GC::Ref<Response>> Response::redirect(JS::VM& vm, String con
     auto value = parsed_url->serialize();
 
     // 7. Append (`Location`, value) to responseObject’s response’s header list.
-    auto header = Infrastructure::Header::from_string_pair("Location"sv, value);
+    auto header = HTTP::Header::isomorphic_encode("Location"sv, value);
     response_object->response()->header_list()->append(move(header));
 
     // 8. Return responseObject.
@@ -212,7 +208,7 @@ WebIDL::ExceptionOr<GC::Ref<Response>> Response::redirect(JS::VM& vm, String con
 }
 
 // https://fetch.spec.whatwg.org/#dom-response-json
-WebIDL::ExceptionOr<GC::Ref<Response>> Response::json(JS::VM& vm, JS::Value data, ResponseInit const& init)
+WebIDL::ExceptionOr<GC::Ref<Response>> Response::json(JS::VM& vm, JS::Value data, Bindings::ResponseInit const& init)
 {
     auto& realm = *vm.current_realm();
 
@@ -229,7 +225,7 @@ WebIDL::ExceptionOr<GC::Ref<Response>> Response::json(JS::VM& vm, JS::Value data
     // 4. Perform initialize a response given responseObject, init, and (body, "application/json").
     auto body_with_type = Infrastructure::BodyWithType {
         .body = body,
-        .type = MUST(ByteBuffer::copy("application/json"sv.bytes()))
+        .type = "application/json"sv,
     };
     TRY(response_object->initialize_response(init, move(body_with_type)));
 
@@ -278,7 +274,7 @@ bool Response::ok() const
 String Response::status_text() const
 {
     // The statusText getter steps are to return this’s response’s status message.
-    return MUST(String::from_utf8(m_response->status_message()));
+    return MUST(String::from_byte_string(m_response->status_message()));
 }
 
 // https://fetch.spec.whatwg.org/#dom-response-headers

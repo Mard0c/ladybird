@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/Bindings/NamedNodeMapPrototype.h>
+#include <LibWeb/Bindings/NamedNodeMap.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/NamedNodeMap.h>
@@ -73,7 +73,7 @@ Vector<FlyString> NamedNodeMap::supported_property_names() const
 }
 
 // https://dom.spec.whatwg.org/#dom-namednodemap-item
-Attr const* NamedNodeMap::item(u32 index) const
+Attr* NamedNodeMap::item(u32 index)
 {
     // 1. If index is equal to or greater than this’s attribute list’s size, then return null.
     if (index >= m_attributes.size())
@@ -81,6 +81,11 @@ Attr const* NamedNodeMap::item(u32 index) const
 
     // 2. Otherwise, return this’s attribute list[index].
     return m_attributes[index].ptr();
+}
+
+Attr const* NamedNodeMap::item(u32 index) const
+{
+    return const_cast<NamedNodeMap&>(*this).item(index);
 }
 
 // https://dom.spec.whatwg.org/#dom-namednodemap-getnameditem
@@ -148,17 +153,17 @@ Attr const* NamedNodeMap::get_attribute(FlyString const& qualified_name, size_t*
         *item_index = 0;
 
     // 1. If element is in the HTML namespace and its node document is an HTML document, then set qualifiedName to qualifiedName in ASCII lowercase.
-    bool compare_as_lowercase = associated_element().namespace_uri() == Namespace::HTML && associated_element().document().is_html_document();
+    FlyString const* effective_qualified_name = &qualified_name;
+    FlyString lowercase_qualified_name;
+    if (associated_element().namespace_uri() == Namespace::HTML && associated_element().document().is_html_document()) {
+        lowercase_qualified_name = qualified_name.to_ascii_lowercase();
+        effective_qualified_name = &lowercase_qualified_name;
+    }
 
     // 2. Return the first attribute in element’s attribute list whose qualified name is qualifiedName; otherwise null.
     for (auto const& attribute : m_attributes) {
-        if (compare_as_lowercase) {
-            if (attribute->name().equals_ignoring_ascii_case(qualified_name) && !AK::any_of(attribute->name().bytes(), is_ascii_upper_alpha))
-                return attribute;
-        } else {
-            if (attribute->name() == qualified_name)
-                return attribute;
-        }
+        if (attribute->name() == *effective_qualified_name)
+            return attribute;
 
         if (item_index)
             ++(*item_index);
@@ -195,8 +200,7 @@ Attr const* NamedNodeMap::get_attribute_ns(Optional<FlyString> const& namespace_
     return nullptr;
 }
 
-// FIXME: Trusted Types integration with DOM is still under review https://github.com/whatwg/dom/pull/1268
-// https://whatpr.org/dom/1268.html#concept-element-attributes-set
+// https://dom.spec.whatwg.org/#concept-element-attributes-set
 WebIDL::ExceptionOr<GC::Ptr<Attr>> NamedNodeMap::set_attribute(Attr& attribute)
 {
     // 1. Let verifiedValue be the result of calling get Trusted Types-compliant attribute value

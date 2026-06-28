@@ -13,13 +13,14 @@
 #include <AK/Vector.h>
 #include <LibGC/Function.h>
 #include <LibJS/Runtime/NativeFunction.h>
+#include <LibTextCodec/Decoder.h>
+#include <LibWeb/Bindings/MessagePort.h>
+#include <LibWeb/Bindings/PromiseRejectionEvent.h>
 #include <LibWeb/HTML/PromiseRejectionEvent.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
-#include <LibWeb/HTML/StructuredSerializeOptions.h>
 #include <LibWeb/HTML/UniversalGlobalScope.h>
 #include <LibWeb/HTML/Window.h>
-#include <LibWeb/Infra/Strings.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -34,6 +35,7 @@ void UniversalGlobalScopeMixin::visit_edges(GC::Cell::Visitor& visitor)
     visitor.visit(m_count_queuing_strategy_size_function);
     visitor.visit(m_byte_length_queuing_strategy_size_function);
     visitor.ignore(m_outstanding_rejected_promises_weak_set);
+    visitor.visit(m_about_to_be_notified_rejected_promises_list);
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#dom-btoa
@@ -71,7 +73,7 @@ WebIDL::ExceptionOr<String> UniversalGlobalScopeMixin::atob(String const& data) 
 
     // 3. Return decodedData.
     // decode_base64() returns a byte buffer. LibJS uses UTF-8 for strings. Use isomorphic decoding to convert bytes to UTF-8.
-    return Infra::isomorphic_decode(decoded_data.value());
+    return TextCodec::isomorphic_decode(decoded_data.value());
 }
 
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#dom-queuemicrotask
@@ -91,7 +93,7 @@ void UniversalGlobalScopeMixin::queue_microtask(WebIDL::CallbackType& callback)
 }
 
 // https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone
-WebIDL::ExceptionOr<JS::Value> UniversalGlobalScopeMixin::structured_clone(JS::Value value, StructuredSerializeOptions const& options) const
+WebIDL::ExceptionOr<JS::Value> UniversalGlobalScopeMixin::structured_clone(JS::Value value, Bindings::StructuredSerializeOptions const& options) const
 {
     auto& realm = HTML::relevant_realm(this_impl());
 
@@ -143,7 +145,7 @@ GC::Ref<WebIDL::CallbackType> UniversalGlobalScopeMixin::byte_length_queuing_str
         };
 
         // 2. Let F be ! CreateBuiltinFunction(steps, 1, "size", « », globalObject’s relevant Realm).
-        auto function = JS::NativeFunction::create(realm, move(steps), 1, "size"_utf16_fly_string, &realm);
+        auto function = JS::NativeFunction::create(realm, Function<JS::ThrowCompletionOr<JS::Value>(JS::VM&)> { move(steps) }, 1, "size"_utf16_fly_string, &realm);
 
         // 3. Set globalObject’s byte length queuing strategy size function to a Function that represents a reference to F, with callback context equal to globalObject’s relevant settings object.
         // FIXME: Update spec comment to pass globalObject's relevant realm once Streams spec is updated for ShadowRealm spec
@@ -167,12 +169,16 @@ bool UniversalGlobalScopeMixin::remove_from_outstanding_rejected_promises_weak_s
 
 void UniversalGlobalScopeMixin::push_onto_about_to_be_notified_rejected_promises_list(GC::Ref<JS::Promise> promise)
 {
-    m_about_to_be_notified_rejected_promises_list.append(GC::make_root(promise));
+    if (!m_about_to_be_notified_rejected_promises_list)
+        m_about_to_be_notified_rejected_promises_list = JS::VM::the().heap().allocate<GC::HeapVector<GC::Ref<JS::Promise>>>();
+    m_about_to_be_notified_rejected_promises_list->elements().append(promise);
 }
 
 bool UniversalGlobalScopeMixin::remove_from_about_to_be_notified_rejected_promises_list(GC::Ref<JS::Promise> promise)
 {
-    return m_about_to_be_notified_rejected_promises_list.remove_first_matching([&](auto& promise_in_list) {
+    if (!m_about_to_be_notified_rejected_promises_list)
+        return false;
+    return m_about_to_be_notified_rejected_promises_list->elements().remove_first_matching([&](auto& promise_in_list) {
         return promise == promise_in_list;
     });
 }
@@ -180,27 +186,25 @@ bool UniversalGlobalScopeMixin::remove_from_about_to_be_notified_rejected_promis
 // https://html.spec.whatwg.org/multipage/webappapis.html#notify-about-rejected-promises
 void UniversalGlobalScopeMixin::notify_about_rejected_promises(Badge<EventLoop>)
 {
-    auto& realm = this_impl().realm();
-
     // 1. Let list be a copy of settings object's about-to-be-notified rejected promises list.
     auto list = m_about_to_be_notified_rejected_promises_list;
 
     // 2. If list is empty, return.
-    if (list.is_empty())
+    if (!list || list->elements().is_empty())
         return;
 
     // 3. Clear settings object's about-to-be-notified rejected promises list.
-    m_about_to_be_notified_rejected_promises_list.clear();
+    m_about_to_be_notified_rejected_promises_list = nullptr;
 
     // 4. Let global be settings object's global object.
     auto& global = this_impl();
 
     // 5. Queue a global task on the DOM manipulation task source given global to run the following substep:
-    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(realm.heap(), [this, &global, list = move(list)] {
+    queue_global_task(Task::Source::DOMManipulation, global, GC::create_function(global.heap(), [this, &global, list = move(list)] {
         auto& realm = global.realm();
 
         // 1. For each promise p in list:
-        for (auto const& promise : list) {
+        for (auto const& promise : list->elements()) {
 
             // 1. If p's [[PromiseIsHandled]] internal slot is true, continue to the next iteration of the loop.
             if (promise->is_handled())
@@ -208,13 +212,13 @@ void UniversalGlobalScopeMixin::notify_about_rejected_promises(Badge<EventLoop>)
 
             // 2. Let notHandled be the result of firing an event named unhandledrejection at global, using PromiseRejectionEvent, with the cancelable attribute initialized to true,
             //    the promise attribute initialized to p, and the reason attribute initialized to the value of p's [[PromiseResult]] internal slot.
-            PromiseRejectionEventInit event_init {
+            Bindings::PromiseRejectionEventInit event_init {
                 {
                     .bubbles = false,
                     .cancelable = true,
                     .composed = false,
                 },
-                // Sadly we can't use .promise and .reason here, as we can't use the designator on the initialization of DOM::EventInit above.
+                // Sadly we can't use .promise and .reason here, as we can't use the designator on the initialization of Bindings::EventInit above.
                 /* .promise = */ *promise,
                 /* .reason = */ promise->result(),
             };
@@ -235,6 +239,18 @@ void UniversalGlobalScopeMixin::notify_about_rejected_promises(Badge<EventLoop>)
                 HTML::report_exception_to_console(promise->result(), realm, ErrorInPromise::Yes);
         }
     }));
+}
+
+static bool s_experimental_interfaces_exposed = false;
+
+void UniversalGlobalScopeMixin::set_experimental_interfaces_exposed(bool exposed)
+{
+    s_experimental_interfaces_exposed = exposed;
+}
+
+bool UniversalGlobalScopeMixin::expose_experimental_interfaces()
+{
+    return s_experimental_interfaces_exposed;
 }
 
 }

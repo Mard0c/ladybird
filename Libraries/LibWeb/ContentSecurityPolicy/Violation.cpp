@@ -29,7 +29,7 @@ GC_DEFINE_ALLOCATOR(Violation);
 Violation::Violation(GC::Ptr<JS::Object> global_object, GC::Ref<Policy const> policy, String directive)
     : m_global_object(global_object)
     , m_policy(policy)
-    , m_effective_directive(directive)
+    , m_effective_directive(move(directive))
 {
 }
 
@@ -38,7 +38,7 @@ GC::Ref<Violation> Violation::create_a_violation_object_for_global_policy_and_di
 {
     // 1. Let violation be a new violation whose global object is global, policy is policy, effective directive is
     //    directive, and resource is null.
-    auto violation = realm.create<Violation>(global_object, policy, directive);
+    auto violation = realm.create<Violation>(global_object, policy, move(directive));
 
     // FIXME: 2. If the user agent is currently executing script, and can extract a source file’s URL, line number,
     //           and column number from the global, set violation’s source file, line number, and column number
@@ -98,15 +98,14 @@ URL::URL Violation::url() const
         return URL::URL {};
     }
 
-    // FIXME: File a spec issue about what to do for ShadowRealms here.
     auto& universal_scope = as<HTML::UniversalGlobalScopeMixin>(*m_global_object);
-    auto& principal_global = HTML::relevant_principal_global_object(universal_scope.this_impl());
+    auto& global = HTML::relevant_global_object(universal_scope.this_impl());
 
-    if (auto* window = as_if<HTML::Window>(principal_global)) {
+    if (auto* window = as_if<HTML::Window>(global)) {
         return window->associated_document().url();
     }
 
-    if (auto* worker = as_if<HTML::WorkerGlobalScope>(principal_global)) {
+    if (auto* worker = as_if<HTML::WorkerGlobalScope>(global)) {
         return worker->url();
     }
 
@@ -317,7 +316,7 @@ void Violation::report_a_violation(JS::Realm& realm)
         if (is<DOM::EventTarget>(target_as_object.ptr())) {
             auto& event_target = static_cast<DOM::EventTarget&>(*target_as_object.ptr());
 
-            SecurityPolicyViolationEventInit event_init {};
+            Bindings::SecurityPolicyViolationEventInit event_init {};
 
             // bubbles
             //    true
@@ -406,7 +405,7 @@ void Violation::report_a_violation(JS::Realm& realm)
 
                         // method
                         //    "POST"
-                        request->set_method(MUST(ByteBuffer::copy("POST"sv.bytes())));
+                        request->set_method("POST"sv);
 
                         // url
                         //    violation’s url
@@ -415,9 +414,8 @@ void Violation::report_a_violation(JS::Realm& realm)
 
                         // origin
                         //    violation's global object's relevant settings object's origin
-                        // FIXME: File spec issue that global object can be null, so we use the realm to get the ESO
-                        //        instead, and cross ShadowRealm boundaries with the principal realm.
-                        auto& environment_settings_object = Bindings::principal_host_defined_environment_settings_object(HTML::principal_realm(realm));
+                        // FIXME: File spec issue that global object can be null, so we use the realm to get the ESO instead.
+                        auto& environment_settings_object = Bindings::principal_host_defined_environment_settings_object(realm);
                         request->set_origin(environment_settings_object.origin());
 
                         // traversable for user prompts
@@ -447,10 +445,9 @@ void Violation::report_a_violation(JS::Realm& realm)
                         // header list
                         //    A header list containing a single header whose name is "Content-Type", and value is
                         //    "application/csp-report"
-                        auto header_list = Fetch::Infrastructure::HeaderList::create(vm);
-                        auto content_type_header = Fetch::Infrastructure::Header::from_string_pair("Content-Type"sv, "application/csp-report"sv);
-                        header_list->append(move(content_type_header));
-                        request->set_header_list(header_list);
+                        auto header_list = HTTP::HeaderList::create();
+                        header_list->append({ "Content-Type"sv, "application/csp-report"sv });
+                        request->set_header_list(move(header_list));
 
                         // body
                         //    The result of executing § 5.3 Obtain the deprecated serialization of violation on

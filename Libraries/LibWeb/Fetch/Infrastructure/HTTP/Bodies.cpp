@@ -41,10 +41,86 @@ Body::Body(GC::Ref<Streams::ReadableStream> stream, SourceType source, Optional<
 {
 }
 
+void Body::set_source(Core::ImmutableBytes source, Optional<u64> length)
+{
+    m_source = move(source);
+    m_length = length;
+}
+
 void Body::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_stream);
+    visitor.visit(m_sniff_bytes_callback);
+    m_source.visit(
+        [&](GC::Ref<FileAPI::Blob> const& blob) { visitor.visit(blob); },
+        [](auto const&) {});
+}
+
+void Body::append_sniff_bytes(ReadonlyBytes bytes)
+{
+    if (m_sniff_bytes_complete)
+        return;
+
+    size_t space_remaining = MAX_SNIFF_BYTES - m_sniff_bytes.size();
+    if (space_remaining == 0) {
+        set_sniff_bytes_complete();
+        return;
+    }
+
+    size_t to_append = min(bytes.size(), space_remaining);
+    m_sniff_bytes.append(bytes.slice(0, to_append));
+
+    if (m_sniff_bytes.size() >= MAX_SNIFF_BYTES)
+        set_sniff_bytes_complete();
+}
+
+void Body::set_sniff_bytes_complete()
+{
+    if (m_sniff_bytes_complete)
+        return;
+    m_sniff_bytes_complete = true;
+    if (m_sniff_bytes_callback) {
+        auto callback = exchange(m_sniff_bytes_callback, nullptr);
+        callback->function()(m_sniff_bytes);
+    }
+}
+
+Optional<ReadonlyBytes> Body::sniff_bytes_if_available() const
+{
+    // Non-streaming body: source has bytes
+    if (m_source.has<ByteBuffer>()) {
+        auto const& buffer = m_source.get<ByteBuffer>();
+        return buffer.bytes().slice(0, min(buffer.size(), MAX_SNIFF_BYTES));
+    }
+
+    if (m_source.has<Core::ImmutableBytes>()) {
+        auto bytes = m_source.get<Core::ImmutableBytes>().bytes();
+        return bytes.slice(0, min(bytes.size(), MAX_SNIFF_BYTES));
+    }
+
+    if (m_source.has<GC::Ref<FileAPI::Blob>>()) {
+        auto raw = m_source.get<GC::Ref<FileAPI::Blob>>()->raw_bytes();
+        return raw.slice(0, min(raw.size(), MAX_SNIFF_BYTES));
+    }
+
+    // Streaming body: bytes captured during fetch
+    if (m_sniff_bytes_complete)
+        return m_sniff_bytes;
+
+    // Still waiting for bytes
+    return {};
+}
+
+void Body::wait_for_sniff_bytes(SniffBytesCallback on_ready)
+{
+    if (auto bytes = sniff_bytes_if_available(); bytes.has_value()) {
+        on_ready->function()(bytes.value());
+        return;
+    }
+
+    // Wait for bytes to arrive
+    m_sniff_bytes_callback = on_ready;
 }
 
 // https://fetch.spec.whatwg.org/#concept-body-clone

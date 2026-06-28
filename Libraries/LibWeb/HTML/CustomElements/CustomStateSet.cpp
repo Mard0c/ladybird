@@ -8,6 +8,7 @@
 #include <LibJS/Runtime/PrimitiveString.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/Invalidation/CustomElementInvalidator.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/HTML/CustomElements/CustomStateSet.h>
 
@@ -42,12 +43,12 @@ void CustomStateSet::visit_edges(Cell::Visitor& visitor)
 
 bool CustomStateSet::has_state(FlyString const& state) const
 {
-    return m_set_entries->set_has(JS::PrimitiveString::create(realm().vm(), state));
+    return m_set_entries->set_has(JS::PrimitiveString::create(realm().vm(), Utf16FlyString::from_utf8(state)));
 }
 
 void CustomStateSet::on_set_modified_from_js(Badge<Bindings::CustomStateSetPrototype>)
 {
-    m_element->invalidate_style(DOM::StyleInvalidationReason::CustomStateSetChange);
+    CSS::Invalidation::invalidate_style_after_custom_state_set_change(*m_element);
 }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2021-2025, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -147,7 +147,7 @@ enum class WaitMode {
 };
 
 // 25.4.3.14 DoWait ( mode, typedArray, index, value, timeout ), https://tc39.es/ecma262/#sec-dowait
-static ThrowCompletionOr<Value> do_wait(VM& vm, WaitMode mode, TypedArrayBase& typed_array, Value index_value, Value expected_value, Value timeout_value)
+static ThrowCompletionOr<Value> do_wait(VM& vm, WaitMode mode, TypedArrayBase& typed_array, Value index, Value expected_value, Value timeout_value)
 {
     // 1. Let taRecord be ? ValidateIntegerTypedArray(typedArray, true).
     auto typed_array_record = TRY(validate_integer_typed_array(vm, typed_array, true));
@@ -159,8 +159,8 @@ static ThrowCompletionOr<Value> do_wait(VM& vm, WaitMode mode, TypedArrayBase& t
     if (!buffer->is_shared_array_buffer())
         return vm.throw_completion<TypeError>(ErrorType::NotASharedArrayBuffer);
 
-    // 4. Let i be ? ValidateAtomicAccess(taRecord, index).
-    auto index = TRY(validate_atomic_access(vm, typed_array_record, index_value));
+    // 4. Let byteIndexInBuffer be ? ValidateAtomicAccess(taRecord, index).
+    auto byte_index_in_buffer = TRY(validate_atomic_access(vm, typed_array_record, index));
 
     // 5. Let arrayTypeName be typedArray.[[TypedArrayName]].
     auto const& array_type_name = typed_array.element_name();
@@ -190,7 +190,7 @@ static ThrowCompletionOr<Value> do_wait(VM& vm, WaitMode mode, TypedArrayBase& t
         return vm.throw_completion<TypeError>(ErrorType::AgentCannotSuspend);
 
     // FIXME: Implement the remaining steps when we support SharedArrayBuffer.
-    (void)index;
+    (void)byte_index_in_buffer;
     (void)value;
     (void)timeout;
 
@@ -248,7 +248,7 @@ void AtomicsObject::initialize(Realm& realm)
     define_native_function(realm, vm.names.xor_, xor_, 3, attr);
 
     // 25.4.17 Atomics [ @@toStringTag ], https://tc39.es/ecma262/#sec-atomics-@@tostringtag
-    define_direct_property(vm.well_known_symbol_to_string_tag(), PrimitiveString::create(vm, "Atomics"_string), Attribute::Configurable);
+    define_direct_property(vm.well_known_symbol_to_string_tag(), PrimitiveString::create(vm, "Atomics"_utf16_fly_string), Attribute::Configurable);
 }
 
 // 25.4.4 Atomics.add ( typedArray, index, value ), https://tc39.es/ecma262/#sec-atomics.add
@@ -320,7 +320,7 @@ static ThrowCompletionOr<Value> atomic_compare_exchange_impl(VM& vm, TypedArrayB
     auto* buffer = typed_array.viewed_array_buffer();
 
     // 3. Let block be buffer.[[ArrayBufferData]].
-    auto& block = buffer->buffer();
+    auto block = buffer->bytes();
 
     // 7. Let elementType be TypedArrayElementType(typedArray).
     // 8. Let elementSize be TypedArrayElementSize(typedArray).
@@ -342,8 +342,7 @@ static ThrowCompletionOr<Value> atomic_compare_exchange_impl(VM& vm, TypedArrayB
     // 13. Else,
 
     // a. Let rawBytesRead be a List of length elementSize whose elements are the sequence of elementSize bytes starting with block[byteIndexInBuffer].
-    // FIXME: Propagate errors.
-    auto raw_bytes_read = MUST(block.slice(byte_index_in_buffer, sizeof(T)));
+    auto raw_bytes_read = MUST(ByteBuffer::copy(block.slice(byte_index_in_buffer, sizeof(T))));
 
     // b. If ByteListEqual(rawBytesRead, expectedBytes) is true, then
     //    i. Store the individual bytes of replacementBytes into block, starting at block[byteIndexInBuffer].
@@ -352,7 +351,7 @@ static ThrowCompletionOr<Value> atomic_compare_exchange_impl(VM& vm, TypedArrayB
     } else {
         using U = Conditional<IsSame<ClampedU8, T>, u8, T>;
 
-        auto* v = reinterpret_cast<U*>(block.span().slice(byte_index_in_buffer).data());
+        auto* v = reinterpret_cast<U*>(block.slice(byte_index_in_buffer).data());
         auto* e = reinterpret_cast<U*>(expected_bytes.data());
         auto* r = reinterpret_cast<U*>(replacement_bytes.data());
         (void)AK::atomic_compare_exchange_strong(v, *e, *r);
@@ -576,7 +575,7 @@ JS_DEFINE_NATIVE_FUNCTION(AtomicsObject::notify)
     auto* buffer = typed_array->viewed_array_buffer();
 
     // 5. Let block be buffer.[[ArrayBufferData]].
-    auto& block = buffer->buffer();
+    auto block = buffer->bytes();
 
     // 6. If IsSharedArrayBuffer(buffer) is false, return +0𝔽.
     if (!buffer->is_shared_array_buffer())

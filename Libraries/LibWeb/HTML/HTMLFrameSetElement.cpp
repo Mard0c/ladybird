@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/Bindings/HTMLFrameSetElementPrototype.h>
+#include <LibWeb/Bindings/HTMLFrameSetElement.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -23,7 +23,7 @@ HTMLFrameSetElement::HTMLFrameSetElement(DOM::Document& document, DOM::Qualified
 
 HTMLFrameSetElement::~HTMLFrameSetElement() = default;
 
-void HTMLFrameSetElement::adjust_computed_style(CSS::ComputedProperties& style)
+void HTMLFrameSetElement::adjust_computed_style(CSS::ComputedProperties::Builder& style)
 {
     // https://drafts.csswg.org/css-display-3/#unbox
     if (style.display().is_contents())

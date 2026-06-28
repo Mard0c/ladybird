@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Utf16StringBuilder.h>
 #include <LibGfx/Color.h>
+#include <LibWeb/Bindings/Document.h>
+#include <LibWeb/CSS/CascadedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyNameAndID.h>
 #include <LibWeb/CSS/StyleComputer.h>
@@ -13,6 +16,7 @@
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/CharacterData.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/DocumentFragment.h>
 #include <LibWeb/DOM/DocumentType.h>
 #include <LibWeb/DOM/Element.h>
@@ -283,16 +287,18 @@ Utf16String canonical_space_sequence(size_t length, bool non_breaking_start, boo
         return "\u00A0"_utf16;
 
     // 4. Let buffer be the empty string.
-    StringBuilder buffer { StringBuilder::Mode::UTF16 };
+    Utf16StringBuilder buffer;
 
     // 5. If non-breaking start is true, let repeated pair be U+00A0 U+0020. Otherwise, let it be
     //    U+0020 U+00A0.
-    auto repeated_pair = non_breaking_start ? "\u00A0 "sv : " \u00A0"sv;
+    auto first_repeated_code_unit = non_breaking_start ? u'\u00A0' : u' ';
+    auto second_repeated_code_unit = non_breaking_start ? u' ' : u'\u00A0';
 
     // 6. While n is greater than three, append repeated pair to buffer and subtract two from n.
     // AD-HOC: Other browsers seem to fit in as many repeated pairs until the remaining length is <= 2.
     while (n > 2) {
-        buffer.append(repeated_pair);
+        buffer.append_code_unit(first_repeated_code_unit);
+        buffer.append_code_unit(second_repeated_code_unit);
         n -= 2;
     }
 
@@ -327,16 +333,16 @@ Utf16String canonical_space_sequence(size_t length, bool non_breaking_start, boo
     // AD-HOC: Other browsers seem to ignore the above and deal differently with padding the remainder; the first
     //         remaining position is filled with the first character from repeated pair.
     if (n > 0) {
-        buffer.append(repeated_pair.substring_view(0, 1) == " "sv ? " "sv : "\u00A0"sv);
+        buffer.append_code_unit(first_repeated_code_unit);
         --n;
     }
 
     // AD-HOC: Then, the final position is set depending on the value of non-breaking end.
     if (n > 0)
-        buffer.append(non_breaking_end ? "\u00A0"sv : " "sv);
+        buffer.append_code_unit(non_breaking_end ? u'\u00A0' : u' ');
 
     // 9. Return buffer.
-    return buffer.to_utf16_string();
+    return buffer.to_string();
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#canonicalize-whitespace
@@ -624,7 +630,7 @@ Vector<GC::Ref<DOM::Node>> clear_the_value(FlyString const& command, GC::Ref<DOM
         auto& old_values = value_list.values();
 
         auto new_values = old_values;
-        auto was_removed = new_values.remove_all_matching([&](CSS::ValueComparingNonnullRefPtr<CSS::StyleValue const> const& value) {
+        auto was_removed = new_values.remove_all_matching([&](ValueComparingNonnullRefPtr<CSS::StyleValue const> const& value) {
             return value->is_keyword() && value->as_keyword().keyword() == keyword_to_delete;
         });
         if (!was_removed)
@@ -957,7 +963,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
         }
 
         // 9. Record the values of children, and let values be the result.
-        values = record_the_values_of_nodes(document.heap(), children);
+        values = record_the_values_of_nodes(children);
 
         // 10. While children's first member's parent is not start block, split the parent of children.
         while (children.first()->parent() != start_block)
@@ -1001,7 +1007,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
             nodes_to_move.append(*nodes_to_move.last()->next_sibling());
 
         // 8. Record the values of nodes to move, and let values be the result.
-        values = record_the_values_of_nodes(document.heap(), nodes_to_move);
+        values = record_the_values_of_nodes(nodes_to_move);
 
         // 9. For each node in nodes to move, append node as the last child of start block, preserving ranges.
         auto new_position = start_block->length();
@@ -1028,7 +1034,7 @@ void delete_the_selection(Selection& selection, bool block_merging, bool strip_w
             end_block_children.append(child);
             return IterationDecision::Continue;
         });
-        values = record_the_values_of_nodes(document.heap(), end_block_children);
+        values = record_the_values_of_nodes(end_block_children);
 
         // 4. While end block has children, append the first child of end block to start block, preserving ranges.
         auto new_position = start_block->length();
@@ -1137,19 +1143,18 @@ Optional<Utf16String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString
         auto resolved_background_color = [&] { return resolved_value(*node, CSS::PropertyID::BackgroundColor); };
         auto resolved_background_alpha = [&] {
             auto background_color = resolved_background_color();
-            if (!background_color.has_value())
+            if (!background_color)
                 return NumericLimits<u8>::max();
-            VERIFY(is<Layout::NodeWithStyle>(node->layout_node()));
-            return background_color.value()->to_color(CSS::ColorResolutionContext::for_layout_node_with_style(*static_cast<Layout::NodeWithStyle*>(node->layout_node()))).value().alpha();
+            return background_color->to_color(CSS::ColorResolutionContext::for_element({ node_as_element() })).value().alpha();
         };
         while (resolved_background_alpha() == 0 && node->parent() && is<DOM::Element>(*node->parent()))
             node = node->parent();
 
         // 2. Return the resolved value of "background-color" for node.
         auto resolved_value = resolved_background_color();
-        if (!resolved_value.has_value())
+        if (!resolved_value)
             return {};
-        return Utf16String::from_utf8_without_validation(resolved_value.value()->to_string(CSS::SerializationMode::ResolvedValue));
+        return Utf16String::from_utf8_without_validation(resolved_value->to_string(CSS::SerializationMode::ResolvedValue));
     }
 
     // 5. If command is "subscript" or "superscript":
@@ -1196,7 +1201,7 @@ Optional<Utf16String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString
         auto inclusive_ancestor = node;
         do {
             auto text_decoration_line = resolved_value(*node, CSS::PropertyID::TextDecorationLine);
-            if (text_decoration_line.has_value() && value_contains_keyword(text_decoration_line.value(), CSS::Keyword::LineThrough))
+            if (text_decoration_line && value_contains_keyword(*text_decoration_line, CSS::Keyword::LineThrough))
                 return "line-through"_utf16;
             inclusive_ancestor = inclusive_ancestor->parent();
         } while (inclusive_ancestor);
@@ -1210,7 +1215,7 @@ Optional<Utf16String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString
         auto inclusive_ancestor = node;
         do {
             auto text_decoration_line = resolved_value(*node, CSS::PropertyID::TextDecorationLine);
-            if (text_decoration_line.has_value() && value_contains_keyword(text_decoration_line.value(), CSS::Keyword::Underline))
+            if (text_decoration_line && value_contains_keyword(*text_decoration_line, CSS::Keyword::Underline))
                 return "underline"_utf16;
             inclusive_ancestor = inclusive_ancestor->parent();
         } while (inclusive_ancestor);
@@ -1223,9 +1228,9 @@ Optional<Utf16String> effective_command_value(GC::Ptr<DOM::Node> node, FlyString
     VERIFY(command_definition.relevant_css_property.has_value());
 
     auto optional_value = resolved_value(*node, command_definition.relevant_css_property.value());
-    if (!optional_value.has_value())
+    if (!optional_value)
         return {};
-    return Utf16String::from_utf8_without_validation(optional_value.value()->to_string(CSS::SerializationMode::ResolvedValue));
+    return Utf16String::from_utf8_without_validation(optional_value->to_string(CSS::SerializationMode::ResolvedValue));
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#first-equivalent-point
@@ -1298,7 +1303,7 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
                 return IterationDecision::Continue;
 
             // 1. Record the values of the one-node list consisting of child, and let values be the result.
-            auto values = record_the_values_of_nodes(child.heap(), { child });
+            auto values = record_the_values_of_nodes({ child });
 
             // 2. Split the parent of the one-node list consisting of child.
             split_the_parent_of_nodes({ child });
@@ -1314,7 +1319,7 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
     }
 
     // 3. Record the values of the one-node list consisting of node, and let values be the result.
-    auto values = record_the_values_of_nodes(node->heap(), { node });
+    auto values = record_the_values_of_nodes({ node });
 
     // 4. While node is not an allowed child of its parent, split the parent of the one-node list consisting of node.
     while (!is_allowed_child_of_node(node, GC::Ref { *node->parent() }))
@@ -1386,7 +1391,7 @@ void force_the_value(GC::Ref<DOM::Node> node, FlyString const& command, Optional
             { node },
             [&](GC::Ref<DOM::Node> sibling) {
                 return is_simple_modifiable_element(sibling)
-                    && specified_command_value(static_cast<DOM::Element&>(*sibling), command) == new_value
+                    && values_are_equivalent(command, specified_command_value(as<DOM::Element>(*sibling), command), new_value)
                     && values_are_loosely_equivalent(command, effective_command_value(sibling, command), new_value);
             },
             [] -> GC::Ptr<DOM::Node> { return {}; });
@@ -1861,8 +1866,7 @@ bool is_block_boundary_point(DOM::BoundaryPoint boundary_point)
 // https://w3c.github.io/editing/docs/execCommand/#block-end-point
 bool is_block_end_point(DOM::BoundaryPoint boundary_point)
 {
-    // A boundary point (node, offset) is a block end point if either node's parent is null and
-    // offset is node's length;
+    // A boundary point (node, offset) is a block end point if either node's parent is null and offset is node's length;
     if (!boundary_point.node->parent() && boundary_point.offset == boundary_point.node->length())
         return true;
 
@@ -1892,13 +1896,11 @@ bool is_block_node(GC::Ref<DOM::Node> node)
 // https://w3c.github.io/editing/docs/execCommand/#block-start-point
 bool is_block_start_point(DOM::BoundaryPoint boundary_point)
 {
-    // A boundary point (node, offset) is a block start point if either node's parent is null and
-    // offset is zero;
+    // A boundary point (node, offset) is a block start point if either node's parent is null and offset is zero;
     if (!boundary_point.node->parent() && boundary_point.offset == 0)
         return true;
 
-    // or node has a child with index offset − 1, and that child is either a visible block node or a
-    // visible br.
+    // or node has a child with index offset − 1, and that child is either a visible block node or a visible br.
     auto offset_minus_one_child = boundary_point.node->child_at_index(boundary_point.offset - 1);
     return offset_minus_one_child && is_visible_node(*offset_minus_one_child)
         && (is_block_node(*offset_minus_one_child) || is<HTML::HTMLBRElement>(*offset_minus_one_child));
@@ -2145,9 +2147,11 @@ bool is_indentation_element(GC::Ref<DOM::Node> node)
     return is<HTML::HTMLDivElement>(element)
         && element.has_attribute(HTML::AttributeNames::style)
         && inline_style
-        && (!inline_style->margin().is_empty() || !inline_style->margin_top().is_empty()
-            || !inline_style->margin_right().is_empty() || !inline_style->margin_bottom().is_empty()
-            || !inline_style->margin_left().is_empty());
+        && (!inline_style->get_property_value("margin"_utf16_fly_string).is_empty()
+            || !inline_style->get_property_value("margin-top"_utf16_fly_string).is_empty()
+            || !inline_style->get_property_value("margin-right"_utf16_fly_string).is_empty()
+            || !inline_style->get_property_value("margin-bottom"_utf16_fly_string).is_empty()
+            || !inline_style->get_property_value("margin-left"_utf16_fly_string).is_empty());
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#inline-node
@@ -2491,7 +2495,7 @@ bool is_simple_modifiable_element(GC::Ref<DOM::Node> node)
     if (html_element.local_name().is_one_of(HTML::TagNames::a, HTML::TagNames::font, HTML::TagNames::s,
             HTML::TagNames::span, HTML::TagNames::strike, HTML::TagNames::u)
         && inline_style->has_property(CSS::PropertyID::TextDecoration)) {
-        auto text_decoration = inline_style->text_decoration();
+        auto text_decoration = inline_style->get_property_value("text-decoration"_utf16_fly_string);
         if (first_is_one_of(text_decoration,
                 string_from_keyword(CSS::Keyword::LineThrough),
                 string_from_keyword(CSS::Keyword::Underline),
@@ -2621,7 +2625,7 @@ void justify_the_selection(DOM::Document& document, JustifyAlignment alignment)
 
         auto& element = static_cast<DOM::Element&>(*node);
         if (element.has_attribute_ns(Namespace::HTML, HTML::AttributeNames::align)
-            || property_in_style_attribute(element, CSS::PropertyID::TextAlign).has_value()
+            || property_in_style_attribute(element, CSS::PropertyID::TextAlign)
             || element.local_name() == HTML::TagNames::center)
             element_list.append(element);
 
@@ -3005,7 +3009,7 @@ void outdent(GC::Ref<DOM::Node> node)
         // 4. Otherwise:
         else {
             // 1. Record the values of node's children, and let values be the result.
-            auto values = record_the_values_of_nodes(node->heap(), children);
+            auto values = record_the_values_of_nodes(children);
 
             // 2. Remove node, preserving its descendants.
             remove_node_preserving_its_descendants(node);
@@ -3293,10 +3297,10 @@ Vector<RecordedOverride> record_current_states_and_values(DOM::Document const& d
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#record-the-values
-GC::ConservativeVector<RecordedNodeValue> record_the_values_of_nodes(GC::Heap& heap, Vector<GC::Ref<DOM::Node>> const& node_list)
+GC::ConservativeVector<RecordedNodeValue> record_the_values_of_nodes(Vector<GC::Ref<DOM::Node>> const& node_list)
 {
     // 1. Let values be a list of (node, command, specified command value) triples, initially empty.
-    GC::ConservativeVector<RecordedNodeValue> values { heap };
+    GC::ConservativeVector<RecordedNodeValue> values;
 
     // 2. For each node in node list, for each command in the list "subscript", "bold", "fontName",
     //    "fontSize", "foreColor", "hiliteColor", "italic", "strikethrough", and "underline" in that
@@ -3719,7 +3723,7 @@ void set_the_selections_value(DOM::Document& document, FlyString const& command,
         }
 
         // 5. Otherwise, if command is "createLink" or it has a value specified, set the value override to new value.
-        else if (command == CommandNames::createLink || !MUST(document.query_command_value(CommandNames::createLink)).is_empty()) {
+        else if (command == CommandNames::createLink || command_definition->value) {
             document.set_command_value_override(command, *new_value);
         }
 
@@ -3786,7 +3790,7 @@ GC::Ref<DOM::Element> set_the_tag_name(GC::Ref<DOM::Element> element, FlyString 
         return element;
 
     // 3. Let replacement element be the result of calling createElement(new name) on the ownerDocument of element.
-    auto replacement_element = MUST(element->owner_document()->create_element(new_name.to_string(), DOM::ElementCreationOptions {}));
+    auto replacement_element = MUST(element->owner_document()->create_element(new_name.to_string(), Bindings::ElementCreationOptions {}));
 
     // 4. Insert replacement element into element's parent immediately before element.
     element->parent()->insert_before(replacement_element, element);
@@ -3847,10 +3851,10 @@ Optional<Utf16String> specified_command_value(GC::Ref<DOM::Element> element, Fly
     //    "text-decoration":
     if (command == CommandNames::strikethrough) {
         auto text_decoration_style = property_in_style_attribute(element, CSS::PropertyID::TextDecoration);
-        if (text_decoration_style.has_value()) {
+        if (text_decoration_style) {
             // 1. If element's style attribute sets "text-decoration" to a value containing "line-through", return
             //    "line-through".
-            if (value_contains_keyword(text_decoration_style.value(), CSS::Keyword::LineThrough))
+            if (value_contains_keyword(*text_decoration_style, CSS::Keyword::LineThrough))
                 return "line-through"_utf16;
 
             // 2. Return null.
@@ -3865,9 +3869,9 @@ Optional<Utf16String> specified_command_value(GC::Ref<DOM::Element> element, Fly
     // 6. If command is "underline", and element has a style attribute set, and that attribute sets "text-decoration":
     if (command == CommandNames::underline) {
         auto text_decoration_style = property_in_style_attribute(element, CSS::PropertyID::TextDecoration);
-        if (text_decoration_style.has_value()) {
+        if (text_decoration_style) {
             // 1. If element's style attribute sets "text-decoration" to a value containing "underline", return "underline".
-            if (value_contains_keyword(text_decoration_style.value(), CSS::Keyword::Underline))
+            if (value_contains_keyword(*text_decoration_style, CSS::Keyword::Underline))
                 return "underline"_utf16;
 
             // 2. Return null.
@@ -3900,11 +3904,10 @@ Optional<Utf16String> specified_command_value(GC::Ref<DOM::Element> element, Fly
     //     "xxx-large".)
     if (is<HTML::HTMLFontElement>(*element)) {
         auto const& font_element = static_cast<HTML::HTMLFontElement&>(*element);
-        auto cascaded_properties = font_element.document().heap().allocate<CSS::CascadedProperties>();
-        font_element.apply_presentational_hints(cascaded_properties);
-        auto property_value = cascaded_properties->property(property.value());
-        if (property_value)
-            return Utf16String::from_utf8_without_validation(property_value->to_string(CSS::SerializationMode::Normal));
+        Vector<CSS::StyleProperty> presentational_hint_properties;
+        font_element.apply_presentational_hints(presentational_hint_properties);
+        if (auto hint = presentational_hint_properties.first_matching([&](auto& it) { return it.property_id == property.value(); }); hint.has_value())
+            return Utf16String::from_utf8_without_validation(hint->value->to_string(CSS::SerializationMode::Normal));
     }
 
     // 12. If element is in the following list, and property is equal to the CSS property name listed for it, return the
@@ -4040,10 +4043,55 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const& node_list)
         remove_extraneous_line_breaks_at_the_end_of_node(*last_node->parent());
 }
 
-enum class ToggleListMode : u8 {
-    Enable,
-    Disable,
-};
+// https://w3c.github.io/editing/docs/execCommand/#standard-inline-value-command
+bool standard_inline_indeterminate(DOM::Document const& document, FlyString const& command)
+{
+    // If a command is a standard inline value command, it is indeterminate if among formattable nodes that are
+    // effectively contained in the active range, there are two that have distinct effective command values.
+    Optional<Utf16String> first_node_value;
+    bool has_distinct_values = false;
+    for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> node) {
+        if (!is_formattable_node(node))
+            return TraversalDecision::Continue;
+
+        auto node_value = effective_command_value(node, command);
+        if (!node_value.has_value())
+            return TraversalDecision::Continue;
+
+        if (!first_node_value.has_value()) {
+            first_node_value = node_value.value();
+        } else if (first_node_value.value() != node_value.value()) {
+            has_distinct_values = true;
+            return TraversalDecision::Break;
+        }
+
+        return TraversalDecision::Continue;
+    });
+    return has_distinct_values;
+}
+
+// https://w3c.github.io/editing/docs/execCommand/#standard-inline-value-command
+Utf16String standard_inline_value(DOM::Document const& document, FlyString const& command)
+{
+    // Its value is the effective command value of the first formattable node that is effectively contained in the
+    // active range;
+    auto range = active_range(document);
+    Optional<Utf16String> value;
+    for_each_node_effectively_contained_in_range(range, [&](GC::Ref<DOM::Node> node) {
+        if (!is_formattable_node(node))
+            return TraversalDecision::Continue;
+
+        value = effective_command_value(node, command);
+        return TraversalDecision::Break;
+    });
+
+    // or if there is no such node, the effective command value of the active range's start node;
+    if (!value.has_value() && range)
+        value = effective_command_value(range->start_container(), command);
+
+    // or if that is null, the empty string.
+    return value.value_or({});
+}
 
 // https://w3c.github.io/editing/docs/execCommand/#toggle-lists
 void toggle_lists(DOM::Document& document, FlyString const& tag_name)
@@ -4051,6 +4099,10 @@ void toggle_lists(DOM::Document& document, FlyString const& tag_name)
     VERIFY(first_is_one_of(tag_name, HTML::TagNames::ol, HTML::TagNames::ul));
 
     // 1. Let mode be "disable" if the selection's list state is tag name, and "enable" otherwise.
+    enum class ToggleListMode : u8 {
+        Enable,
+        Disable,
+    };
     auto mode = ToggleListMode::Enable;
     auto list_state = selections_list_state(document);
     if ((list_state == SelectionsListState::Ol && tag_name == HTML::TagNames::ol)
@@ -4104,7 +4156,7 @@ void toggle_lists(DOM::Document& document, FlyString const& tag_name)
                 });
 
                 // 2. Record the values of children, and let values be the result.
-                auto values = record_the_values_of_nodes(document.heap(), children);
+                auto values = record_the_values_of_nodes(children);
 
                 // 3. Split the parent of children.
                 split_the_parent_of_nodes(children);
@@ -4179,7 +4231,7 @@ void toggle_lists(DOM::Document& document, FlyString const& tag_name)
                 sublist.append(node_list.take_first());
 
             // 5. Record the values of sublist, and let values be the result.
-            auto values = record_the_values_of_nodes(document.heap(), sublist);
+            auto values = record_the_values_of_nodes(sublist);
 
             // 6. Split the parent of sublist.
             split_the_parent_of_nodes(sublist);
@@ -4201,7 +4253,9 @@ void toggle_lists(DOM::Document& document, FlyString const& tag_name)
 
             // 2. While either sublist is empty, or node list is not empty and its first member is the nextSibling of
             //    sublist's last member:
-            while (sublist.is_empty() || (!node_list.is_empty() && node_list.first().ptr() == sublist.last()->next_sibling())) {
+            // AD-HOC: This condition needs to be a bit different from what the spec describes, because node_list and
+            //         sublist can both be empty at the same time: https://github.com/w3c/editing/issues/521
+            while (!node_list.is_empty() && (sublist.is_empty() || node_list.first().ptr() == sublist.last()->next_sibling())) {
                 // 1. If node list's first member is a p or div, set the tag name of node list's first member to "li",
                 //    and append the result to sublist. Remove the first member from node list.
                 if (is<HTML::HTMLParagraphElement>(*node_list.first()) || is<HTML::HTMLDivElement>(*node_list.first())) {
@@ -4260,7 +4314,7 @@ void toggle_lists(DOM::Document& document, FlyString const& tag_name)
             if (!sublist.is_empty() && is<HTML::HTMLElement>(sublist.first()->parent())
                 && static_cast<DOM::Element&>(*sublist.first()->parent()).local_name() == other_tag_name) {
                 // 1. Record the values of sublist, and let values be the result.
-                auto values = record_the_values_of_nodes(document.heap(), sublist);
+                auto values = record_the_values_of_nodes(sublist);
 
                 // 2. Split the parent of sublist.
                 split_the_parent_of_nodes(sublist);
@@ -4628,8 +4682,13 @@ void for_each_node_effectively_contained_in_range(GC::Ptr<DOM::Range> range, Fun
         return;
 
     // A node can still be "effectively contained" in range even if it's not actually contained within the range; so we
-    // need to do an inclusive subtree traversal since the common ancestor could be matched as well.
-    range->common_ancestor_container()->for_each_in_inclusive_subtree([&](GC::Ref<DOM::Node> descendant) {
+    // need to traverse the highest effectively contained ancestor of the common ancestor container.
+    // See: https://w3c.github.io/editing/docs/execCommand/#effectively-contained
+    GC::Ref<DOM::Node> traversal_root = range->common_ancestor_container();
+    while (traversal_root->parent() && is_effectively_contained_in_range(*traversal_root->parent(), *range))
+        traversal_root = *traversal_root->parent();
+
+    traversal_root->for_each_in_inclusive_subtree([&](GC::Ref<DOM::Node> descendant) {
         if (!is_effectively_contained_in_range(descendant, *range)) {
             // NOTE: We cannot skip children here since if a descendant is not effectively contained within a range, its
             //       children might still be.
@@ -4683,7 +4742,7 @@ Array<Utf16View, 7> named_font_sizes()
     return { "x-small"sv, "small"sv, "medium"sv, "large"sv, "x-large"sv, "xx-large"sv, "xxx-large"sv };
 }
 
-Optional<NonnullRefPtr<CSS::StyleValue const>> property_in_style_attribute(GC::Ref<DOM::Element> element, CSS::PropertyID property_id)
+RefPtr<CSS::StyleValue const> property_in_style_attribute(GC::Ref<DOM::Element> element, CSS::PropertyID property_id)
 {
     auto inline_style = element->inline_style();
     if (!inline_style)
@@ -4699,20 +4758,20 @@ Optional<NonnullRefPtr<CSS::StyleValue const>> property_in_style_attribute(GC::R
 Optional<CSS::Display> resolved_display(GC::Ref<DOM::Node> node)
 {
     auto resolved_property = resolved_value(node, CSS::PropertyID::Display);
-    if (!resolved_property.has_value() || !resolved_property.value()->is_display())
+    if (!resolved_property || !resolved_property->is_display())
         return {};
-    return resolved_property.value()->as_display().display();
+    return resolved_property->as_display().display();
 }
 
 Optional<CSS::Keyword> resolved_keyword(GC::Ref<DOM::Node> node, CSS::PropertyID property_id)
 {
     auto resolved_property = resolved_value(node, property_id);
-    if (!resolved_property.has_value() || !resolved_property.value()->is_keyword())
+    if (!resolved_property || !resolved_property->is_keyword())
         return {};
-    return resolved_property.value()->as_keyword().keyword();
+    return resolved_property->as_keyword().keyword();
 }
 
-Optional<NonnullRefPtr<CSS::StyleValue const>> resolved_value(GC::Ref<DOM::Node> node, CSS::PropertyID property_id)
+RefPtr<CSS::StyleValue const> resolved_value(GC::Ref<DOM::Node> node, CSS::PropertyID property_id)
 {
     // Find the nearest inclusive ancestor of node that is an Element. This allows for passing in a DOM::Text node.
     GC::Ptr<DOM::Node> element = node;

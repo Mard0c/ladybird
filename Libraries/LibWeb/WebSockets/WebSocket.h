@@ -15,6 +15,7 @@
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/DOM/EventTarget.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/WebIDL/Buffers.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
 #define ENUMERATE_WEBSOCKET_EVENT_HANDLERS(E) \
@@ -25,11 +26,16 @@
 
 namespace Web::WebSockets {
 
+using WebSocketSendData = FlattenVariant<WebIDL::BufferSourceVariant, Variant<GC::Ref<FileAPI::Blob>, String>>;
+
 class WebSocket final : public DOM::EventTarget {
     WEB_PLATFORM_OBJECT(WebSocket, DOM::EventTarget);
     GC_DECLARE_ALLOCATOR(WebSocket);
 
 public:
+    static constexpr bool OVERRIDES_FINALIZE = true;
+    static constexpr bool OVERRIDES_MUST_SURVIVE_GARBAGE_COLLECTION = true;
+
     static WebIDL::ExceptionOr<GC::Ref<WebSocket>> construct_impl(JS::Realm&, String const& url, Optional<Variant<String, Vector<String>>> const& protocols);
 
     virtual ~WebSocket() override;
@@ -52,7 +58,7 @@ public:
     void set_binary_type(String const& type) { m_binary_type = type; }
 
     WebIDL::ExceptionOr<void> close(Optional<u16> code, Optional<String> reason);
-    WebIDL::ExceptionOr<void> send(Variant<GC::Root<WebIDL::BufferSource>, GC::Root<FileAPI::Blob>, String> const& data);
+    WebIDL::ExceptionOr<void> send(WebSocketSendData const& data);
 
     void make_disappear();
 

@@ -13,6 +13,7 @@
 #include <AK/GenericLexer.h>
 #include <AK/String.h>
 #include <AK/Utf16String.h>
+#include <AK/Utf16StringBuilder.h>
 #include <AK/Utf16View.h>
 #include <AK/Utf8View.h>
 #include <LibWeb/Infra/CharacterTypes.h>
@@ -52,19 +53,19 @@ Utf16String normalize_newlines(Utf16String const& string)
         return string;
 
     // FIXME: Implement a UTF-16 GenericLexer.
-    StringBuilder builder(StringBuilder::Mode::UTF16, string.length_in_code_units());
+    Utf16StringBuilder builder(string.length_in_code_units());
 
     for (size_t i = 0; i < string.length_in_code_units(); ++i) {
         if (auto code_unit = string.code_unit_at(i); code_unit == '\r') {
             if (i + 1 < string.length_in_code_units() && string.code_unit_at(i + 1) == '\n')
                 ++i;
-            builder.append('\n');
+            builder.append_ascii('\n');
         } else {
             builder.append_code_unit(code_unit);
         }
     }
 
-    return builder.to_utf16_string();
+    return builder.to_string();
 }
 
 // https://infra.spec.whatwg.org/#strip-and-collapse-ascii-whitespace
@@ -92,12 +93,12 @@ Utf16String strip_and_collapse_whitespace(Utf16String const& string)
     if (!string.contains_any_of(Infra::ASCII_WHITESPACE_CODE_POINTS))
         return string;
 
-    StringBuilder builder(StringBuilder::Mode::UTF16);
+    Utf16StringBuilder builder;
 
     for (auto code_point : string) {
         if (Infra::is_ascii_whitespace(code_point)) {
-            if (!builder.utf16_string_view().ends_with(' '))
-                builder.append(' ');
+            if (!builder.view().ends_with(' '))
+                builder.append_ascii(' ');
             continue;
         }
 
@@ -105,7 +106,7 @@ Utf16String strip_and_collapse_whitespace(Utf16String const& string)
     }
 
     // ...and then remove any leading and trailing ASCII whitespace from that string.
-    return builder.to_utf16_string().trim(Infra::ASCII_WHITESPACE);
+    return builder.to_string().trim(Infra::ASCII_WHITESPACE);
 }
 
 // https://infra.spec.whatwg.org/#code-unit-prefix
@@ -154,35 +155,6 @@ ErrorOr<String> convert_to_scalar_value_string(StringView string)
         scalar_value_builder.append_code_point(code_point);
     }
     return scalar_value_builder.to_string();
-}
-
-// https://infra.spec.whatwg.org/#isomorphic-encode
-ByteBuffer isomorphic_encode(StringView input)
-{
-    // To isomorphic encode an isomorphic string input: return a byte sequence whose length is equal to input’s code
-    // point length and whose bytes have the same values as the values of input’s code points, in the same order.
-    // NOTE: This is essentially spec-speak for "Encode as ISO-8859-1 / Latin-1".
-    ByteBuffer buf = {};
-    for (auto code_point : Utf8View { input }) {
-        // VERIFY(code_point <= 0xFF);
-        if (code_point > 0xFF)
-            dbgln("FIXME: Trying to isomorphic encode a string with code points > U+00FF.");
-        buf.append((u8)code_point);
-    }
-    return buf;
-}
-
-// https://infra.spec.whatwg.org/#isomorphic-decode
-String isomorphic_decode(ReadonlyBytes input)
-{
-    // To isomorphic decode a byte sequence input, return a string whose code point length is equal
-    // to input’s length and whose code points have the same values as the values of input’s bytes, in the same order.
-    // NOTE: This is essentially spec-speak for "Decode as ISO-8859-1 / Latin-1".
-    StringBuilder builder(input.size());
-    for (u8 code_point : input) {
-        builder.append_code_point(code_point);
-    }
-    return builder.to_string_without_validation();
 }
 
 // https://infra.spec.whatwg.org/#code-unit-less-than

@@ -5,10 +5,10 @@
  */
 
 #include "SVGImageElement.h"
-#include <LibCore/Timer.h>
 #include <LibGC/Heap.h>
-#include <LibGfx/ImmutableBitmap.h>
-#include <LibWeb/Bindings/SVGImageElementPrototype.h>
+#include <LibGfx/DecodedImageFrame.h>
+#include <LibWeb/Bindings/SVGImageElement.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/DocumentObserver.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/PotentialCORSRequest.h>
@@ -20,14 +20,20 @@
 
 namespace Web::SVG {
 
+GC_DEFINE_ALLOCATOR(SVGImageElement);
+
 SVGImageElement::SVGImageElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : SVGGraphicsElement(document, move(qualified_name))
 {
-    m_animation_timer = Core::Timer::create();
-    m_animation_timer->on_timeout = [this] { animate(); };
 }
 
 SVGImageElement::~SVGImageElement() = default;
+
+void SVGImageElement::finalize()
+{
+    Base::finalize();
+    unregister_with_decoded_image_data_if_needed();
+}
 
 void SVGImageElement::initialize(JS::Realm& realm)
 {
@@ -38,13 +44,20 @@ void SVGImageElement::initialize(JS::Realm& realm)
 void SVGImageElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    image_provider_visit_edges(visitor);
     SVGURIReferenceMixin::visit_edges(visitor);
     visitor.visit(m_x);
     visitor.visit(m_y);
     visitor.visit(m_width);
     visitor.visit(m_height);
     visitor.visit(m_resource_request);
+}
+
+void SVGImageElement::adopted_from(DOM::Document& old_document)
+{
+    Base::adopted_from(old_document);
+
+    if (m_load_event_delayer.has_value())
+        m_load_event_delayer.emplace(document());
 }
 
 void SVGImageElement::attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_)
@@ -175,19 +188,14 @@ void SVGImageElement::process_the_url(Optional<String> const& href)
 void SVGImageElement::fetch_the_document(URL::URL const& url)
 {
     m_load_event_delayer.emplace(document());
+    unregister_with_decoded_image_data_if_needed();
     m_resource_request = HTML::SharedResourceRequest::get_or_create(realm(), document().page(), url);
     m_resource_request->add_callbacks(
         [this, resource_request = GC::Root { m_resource_request }] {
             m_load_event_delayer.clear();
-            auto image_data = resource_request->image_data();
-            if (image_data->is_animated() && image_data->frame_count() > 1) {
-                m_current_frame_index = 0;
-                m_animation_timer->set_interval(image_data->frame_duration(0));
-                m_animation_timer->start();
-            }
+            register_with_decoded_image_data_if_needed();
             set_needs_style_update(true);
-            if (auto layout_node = this->layout_node())
-                layout_node->set_needs_layout_update(DOM::SetNeedsLayoutReason::SVGImageElementFetchTheDocument);
+            set_needs_layout_update(DOM::SetNeedsLayoutReason::SVGImageElementFetchTheDocument);
 
             dispatch_event(DOM::Event::create(realm(), HTML::EventNames::load));
         },
@@ -204,84 +212,9 @@ void SVGImageElement::fetch_the_document(URL::URL const& url)
     }
 }
 
-GC::Ptr<Layout::Node> SVGImageElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
+RefPtr<Layout::Node> SVGImageElement::create_layout_node(CSS::ComputedProperties const& style)
 {
-    return heap().allocate<Layout::SVGImageBox>(document(), *this, move(style));
-}
-
-bool SVGImageElement::is_image_available() const
-{
-    return m_resource_request && m_resource_request->image_data();
-}
-
-Optional<CSSPixels> SVGImageElement::intrinsic_width() const
-{
-    if (!m_resource_request)
-        return {};
-    if (auto image_data = m_resource_request->image_data())
-        return image_data->intrinsic_width();
-    return {};
-}
-
-Optional<CSSPixels> SVGImageElement::intrinsic_height() const
-{
-    if (!m_resource_request)
-        return {};
-    if (auto image_data = m_resource_request->image_data())
-        return image_data->intrinsic_height();
-    return {};
-}
-
-Optional<CSSPixelFraction> SVGImageElement::intrinsic_aspect_ratio() const
-{
-    if (!m_resource_request)
-        return {};
-    if (auto image_data = m_resource_request->image_data())
-        return image_data->intrinsic_aspect_ratio();
-    return {};
-}
-
-RefPtr<Gfx::ImmutableBitmap> SVGImageElement::default_image_bitmap_sized(Gfx::IntSize size) const
-{
-    if (!m_resource_request)
-        return {};
-    if (auto data = m_resource_request->image_data())
-        return data->bitmap(0, size);
-    return {};
-}
-
-RefPtr<Gfx::ImmutableBitmap> SVGImageElement::current_image_bitmap_sized(Gfx::IntSize size) const
-{
-    if (!m_resource_request)
-        return {};
-    if (auto data = m_resource_request->image_data())
-        return data->bitmap(m_current_frame_index, size);
-    return {};
-}
-
-void SVGImageElement::animate()
-{
-    auto image_data = m_resource_request->image_data();
-    if (!image_data) {
-        return;
-    }
-
-    m_current_frame_index = (m_current_frame_index + 1) % image_data->frame_count();
-    auto current_frame_duration = image_data->frame_duration(m_current_frame_index);
-
-    if (current_frame_duration != m_animation_timer->interval()) {
-        m_animation_timer->restart(current_frame_duration);
-    }
-
-    if (m_current_frame_index == image_data->frame_count() - 1) {
-        ++m_loops_completed;
-        if (m_loops_completed > 0 && m_loops_completed == image_data->loop_count()) {
-            m_animation_timer->stop();
-        }
-    }
-
-    if (paintable())
-        paintable()->set_needs_display();
+    return make_ref_counted<Layout::SVGImageBox>(document(), *this, style);
 }
 
 GC::Ptr<HTML::DecodedImageData> SVGImageElement::decoded_image_data() const

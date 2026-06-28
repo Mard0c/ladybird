@@ -5,12 +5,12 @@
  */
 
 #include <LibWeb/Layout/BlockContainer.h>
-#include <LibWeb/Painting/PaintableBox.h>
+#include <LibWeb/Painting/PaintableWithLines.h>
 
 namespace Web::Layout {
 
-BlockContainer::BlockContainer(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedProperties> style)
-    : Box(document, node, move(style))
+BlockContainer::BlockContainer(DOM::Document& document, DOM::Node* node, CSS::ComputedProperties const& style)
+    : Box(document, node, style)
 {
 }
 
@@ -21,12 +21,13 @@ BlockContainer::BlockContainer(DOM::Document& document, DOM::Node* node, Nonnull
 
 BlockContainer::~BlockContainer() = default;
 
-Painting::PaintableWithLines const* BlockContainer::paintable_with_lines() const
+RefPtr<Painting::PaintableWithLines const> BlockContainer::paintable_with_lines() const
 {
-    return as_if<Painting::PaintableWithLines>(Box::paintable_box());
+    auto paintable_box = Box::paintable_box();
+    return as_if<Painting::PaintableWithLines>(paintable_box.ptr());
 }
 
-GC::Ptr<Painting::Paintable> BlockContainer::create_paintable() const
+RefPtr<Painting::Paintable> BlockContainer::create_paintable() const
 {
     return Painting::PaintableWithLines::create(*this);
 }

@@ -20,14 +20,6 @@ op ArrayAppend < Instruction
     m_is_spread: bool
 endop
 
-op AsyncIteratorClose < Instruction
-    m_iterator_object: Operand
-    m_iterator_next: Operand
-    m_iterator_done: Operand
-    m_completion_type: Completion::Type
-    m_completion_value: Optional<Value>
-endop
-
 op Await < Instruction
     @terminator
     @nothrow
@@ -52,6 +44,21 @@ op BitwiseOr < Instruction
     m_rhs: Operand
 endop
 
+op ToInt32 < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToString < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToPrimitiveWithStringHint < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
 op BitwiseXor < Instruction
     m_dst: Operand
     m_lhs: Operand
@@ -68,15 +75,195 @@ op Call < Instruction
     m_arguments: Operand[]
 endop
 
-op CallBuiltin < Instruction
-    m_length: u32
+op CallBuiltinMathAbs < Instruction
     m_dst: Operand
     m_callee: Operand
     m_this_value: Operand
-    m_argument_count: u32
-    m_builtin: Builtin
+    m_argument: Operand
     m_expression_string: Optional<StringTableIndex>
-    m_arguments: Operand[]
+endop
+
+op CallBuiltinMathLog < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathPow < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument0: Operand
+    m_argument1: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathExp < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathCeil < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathFloor < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathImul < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument0: Operand
+    m_argument1: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathRandom < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathRound < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathSqrt < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathSin < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathCos < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMathTan < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinRegExpPrototypeExec < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinRegExpPrototypeReplace < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument0: Operand
+    m_argument1: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinRegExpPrototypeSplit < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument0: Operand
+    m_argument1: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinOrdinaryHasInstance < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinArrayIteratorPrototypeNext < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinMapIteratorPrototypeNext < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinSetIteratorPrototypeNext < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinStringIteratorPrototypeNext < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinStringFromCharCode < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinStringPrototypeCharCodeAt < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
+endop
+
+op CallBuiltinStringPrototypeCharAt < Instruction
+    m_dst: Operand
+    m_callee: Operand
+    m_this_value: Operand
+    m_argument: Operand
+    m_expression_string: Optional<StringTableIndex>
 endop
 
 op CallConstruct < Instruction
@@ -132,11 +319,6 @@ op ConcatString < Instruction
     m_src: Operand
 endop
 
-op ContinuePendingUnwind < Instruction
-    @terminator
-    m_resume_target: Label
-endop
-
 op CopyObjectExcludingProperties < Instruction
     m_length: u32
     m_dst: Operand
@@ -152,16 +334,32 @@ op CreateArguments < Instruction
     m_is_immutable: bool
 endop
 
+op CreateAsyncFromSyncIterator < Instruction
+    @nothrow
+    m_dst: Operand
+    m_iterator: Operand
+    m_next_method: Operand
+    m_done: Operand
+endop
+
+op CreateDataPropertyOrThrow < Instruction
+    m_object: Operand
+    m_property: Operand
+    m_value: Operand
+endop
+
 op CreateLexicalEnvironment < Instruction
     @nothrow
-    m_dst: Optional<Operand>
+    m_dst: Operand
+    m_parent: Operand
     m_capacity: u32
+    m_is_catch_environment: bool
 endop
 
 op CreateImmutableBinding < Instruction
     m_environment: Operand
     m_identifier: IdentifierTableIndex
-    m_strict: bool
+    m_strict_binding: bool
 endop
 
 op CreateMutableBinding < Instruction
@@ -200,26 +398,12 @@ endop
 op DeleteById < Instruction
     m_dst: Operand
     m_base: Operand
-    m_property: IdentifierTableIndex
-endop
-
-op DeleteByIdWithThis < Instruction
-    m_dst: Operand
-    m_base: Operand
-    m_this_value: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
 endop
 
 op DeleteByValue < Instruction
     m_dst: Operand
     m_base: Operand
-    m_property: Operand
-endop
-
-op DeleteByValueWithThis < Instruction
-    m_dst: Operand
-    m_base: Operand
-    m_this_value: Operand
     m_property: Operand
 endop
 
@@ -236,16 +420,13 @@ endop
 
 op End < Instruction
     @terminator
+    @nothrow
     m_value: Operand
 endop
 
 op EnterObjectEnvironment < Instruction
+    m_dst: Operand
     m_object: Operand
-endop
-
-op EnterUnwindContext < Instruction
-    @terminator
-    m_entry_point: Label
 endop
 
 op Exp < Instruction
@@ -257,17 +438,17 @@ endop
 op GetById < Instruction
     m_dst: Operand
     m_base: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
     m_base_identifier: Optional<IdentifierTableIndex>
-    m_cache_index: u32
+    m_cache: PropertyLookupCacheIndex
 endop
 
 op GetByIdWithThis < Instruction
     m_dst: Operand
     m_base: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
     m_this_value: Operand
-    m_cache_index: u32
+    m_cache: PropertyLookupCacheIndex
 endop
 
 op GetByValue < Instruction
@@ -291,6 +472,13 @@ op GetCalleeAndThisFromEnvironment < Instruction
     m_cache: EnvironmentCoordinate
 endop
 
+op DynamicGetCalleeAndThisFromEnvironment < Instruction
+    m_callee: Operand
+    m_this_value: Operand
+    m_identifier: IdentifierTableIndex
+    m_cache: EnvironmentCoordinateCacheIndex
+endop
+
 op GetCompletionFields < Instruction
     @nothrow
     m_type_dst: Operand
@@ -301,10 +489,15 @@ endop
 op GetGlobal < Instruction
     m_dst: Operand
     m_identifier: IdentifierTableIndex
-    m_cache_index: u32
+    m_cache: GlobalVariableCacheIndex
 endop
 
 op GetImportMeta < Instruction
+    @nothrow
+    m_dst: Operand
+endop
+
+op GetLexicalEnvironment < Instruction
     @nothrow
     m_dst: Operand
 endop
@@ -321,20 +514,20 @@ op GetLength < Instruction
     m_dst: Operand
     m_base: Operand
     m_base_identifier: Optional<IdentifierTableIndex>
-    m_cache_index: u32
+    m_cache: PropertyLookupCacheIndex
 endop
 
 op GetLengthWithThis < Instruction
     m_dst: Operand
     m_base: Operand
     m_this_value: Operand
-    m_cache_index: u32
+    m_cache: PropertyLookupCacheIndex
 endop
 
 op GetMethod < Instruction
     m_dst: Operand
     m_object: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
 endop
 
 op GetNewTarget < Instruction
@@ -342,11 +535,15 @@ op GetNewTarget < Instruction
     m_dst: Operand
 endop
 
+op GetSuperConstructor < Instruction
+    @nothrow
+    m_dst: Operand
+endop
+
 op GetObjectPropertyIterator < Instruction
-    m_dst_iterator_object: Operand
-    m_dst_iterator_next: Operand
-    m_dst_iterator_done: Operand
+    m_dst_iterator: Operand
     m_object: Operand
+    m_cache: ObjectPropertyIteratorCacheIndex
 endop
 
 op GetPrivateById < Instruction
@@ -355,16 +552,37 @@ op GetPrivateById < Instruction
     m_property: IdentifierTableIndex
 endop
 
+op GetTemplateObject < Instruction
+    @nothrow
+    m_length: u32
+    m_dst: Operand
+    m_strings_count: u32
+    m_cache: TemplateObjectCacheIndex
+    m_strings: Operand[]
+endop
+
 op GetBinding < Instruction
     m_dst: Operand
     m_identifier: IdentifierTableIndex
     m_cache: EnvironmentCoordinate
 endop
 
+op DynamicGetBinding < Instruction
+    m_dst: Operand
+    m_identifier: IdentifierTableIndex
+    m_cache: EnvironmentCoordinateCacheIndex
+endop
+
 op GetInitializedBinding < Instruction
     m_dst: Operand
     m_identifier: IdentifierTableIndex
     m_cache: EnvironmentCoordinate
+endop
+
+op DynamicGetInitializedBinding < Instruction
+    m_dst: Operand
+    m_identifier: IdentifierTableIndex
+    m_cache: EnvironmentCoordinateCacheIndex
 endop
 
 op GreaterThan < Instruction
@@ -407,10 +625,22 @@ op InitializeLexicalBinding < Instruction
     m_cache: EnvironmentCoordinate
 endop
 
+op DynamicInitializeLexicalBinding < Instruction
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
+    m_cache: EnvironmentCoordinateCacheIndex
+endop
+
 op InitializeVariableBinding < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
     m_cache: EnvironmentCoordinate
+endop
+
+op DynamicInitializeVariableBinding < Instruction
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
+    m_cache: EnvironmentCoordinateCacheIndex
 endop
 
 op InstanceOf < Instruction
@@ -419,12 +649,24 @@ op InstanceOf < Instruction
     m_rhs: Operand
 endop
 
+op IsCallable < Instruction
+    @nothrow
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op IsConstructor < Instruction
+    @nothrow
+    m_dst: Operand
+    m_value: Operand
+endop
+
 op IteratorClose < Instruction
     m_iterator_object: Operand
     m_iterator_next: Operand
     m_iterator_done: Operand
     m_completion_type: Completion::Type
-    m_completion_value: Optional<Value>
+    m_completion_value: Operand
 endop
 
 op IteratorNext < Instruction
@@ -442,6 +684,12 @@ op IteratorNextUnpack < Instruction
     m_iterator_done: Operand
 endop
 
+op ObjectPropertyIteratorNext < Instruction
+    m_dst_value: Operand
+    m_dst_done: Operand
+    m_iterator_object: Operand
+endop
+
 op IteratorToArray < Instruction
     m_dst: Operand
     m_iterator_object: Operand
@@ -451,17 +699,20 @@ endop
 
 op Jump < Instruction
     @terminator
+    @nothrow
     m_target: Label
 endop
 
 op JumpFalse < Instruction
     @terminator
+    @nothrow
     m_condition: Operand
     m_target: Label
 endop
 
 op JumpGreaterThan < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -470,6 +721,7 @@ endop
 
 op JumpGreaterThanEquals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -478,6 +730,7 @@ endop
 
 op JumpIf < Instruction
     @terminator
+    @nothrow
     m_condition: Operand
     m_true_target: Label
     m_false_target: Label
@@ -485,6 +738,7 @@ endop
 
 op JumpLessThan < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -493,6 +747,7 @@ endop
 
 op JumpLessThanEquals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -501,6 +756,7 @@ endop
 
 op JumpLooselyEquals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -509,6 +765,7 @@ endop
 
 op JumpLooselyInequals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -517,6 +774,7 @@ endop
 
 op JumpNullish < Instruction
     @terminator
+    @nothrow
     m_condition: Operand
     m_true_target: Label
     m_false_target: Label
@@ -524,6 +782,7 @@ endop
 
 op JumpStrictlyEquals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -532,6 +791,7 @@ endop
 
 op JumpStrictlyInequals < Instruction
     @terminator
+    @nothrow
     m_lhs: Operand
     m_rhs: Operand
     m_true_target: Label
@@ -540,30 +800,20 @@ endop
 
 op JumpTrue < Instruction
     @terminator
+    @nothrow
     m_condition: Operand
     m_target: Label
 endop
 
 op JumpUndefined < Instruction
     @terminator
+    @nothrow
     m_condition: Operand
     m_true_target: Label
     m_false_target: Label
 endop
 
-op LeaveFinally < Instruction
-    @nothrow
-endop
-
-op LeaveLexicalEnvironment < Instruction
-    @nothrow
-endop
-
 op LeavePrivateEnvironment < Instruction
-    @nothrow
-endop
-
-op LeaveUnwindContext < Instruction
     @nothrow
 endop
 
@@ -604,8 +854,27 @@ op Mod < Instruction
 endop
 
 op Mov < Instruction
+    @nothrow
     m_dst: Operand
     m_src: Operand
+endop
+
+op Mov2 < Instruction
+    @nothrow
+    m_dst1: Operand
+    m_src1: Operand
+    m_dst2: Operand
+    m_src2: Operand
+endop
+
+op Mov3 < Instruction
+    @nothrow
+    m_dst1: Operand
+    m_src1: Operand
+    m_dst2: Operand
+    m_src2: Operand
+    m_dst3: Operand
+    m_src3: Operand
 endop
 
 op Mul < Instruction
@@ -622,11 +891,17 @@ op NewArray < Instruction
     m_elements: Operand[]
 endop
 
+op NewArrayWithLength < Instruction
+    m_dst: Operand
+    m_array_length: Operand
+endop
+
 op NewClass < Instruction
     m_length: u32
     m_dst: Operand
     m_super_class: Optional<Operand>
-    m_class_expression: ClassExpression const&
+    m_class_environment: Operand
+    m_class_blueprint_index: u32
     m_lhs_name: Optional<IdentifierTableIndex>
     m_element_keys_count: u32
     m_element_keys: Optional<Operand>[]
@@ -635,12 +910,18 @@ endop
 op NewFunction < Instruction
     @nothrow
     m_dst: Operand
-    m_function_node: FunctionNode const&
+    m_shared_function_data_index: u32
     m_lhs_name: Optional<IdentifierTableIndex>
     m_home_object: Optional<Operand>
 endop
 
 op NewObject < Instruction
+    @nothrow
+    m_dst: Operand
+    m_cache: ObjectShapeCacheIndex
+endop
+
+op NewObjectWithNoPrototype < Instruction
     @nothrow
     m_dst: Operand
 endop
@@ -667,15 +948,16 @@ op NewTypeError < Instruction
     m_error_string: StringTableIndex
 endop
 
-op Not < Instruction
+op NewReferenceError < Instruction
+    @nothrow
     m_dst: Operand
-    m_src: Operand
+    m_error_string: StringTableIndex
 endop
 
-op PrepareYield < Instruction
+op Not < Instruction
     @nothrow
-    m_dest: Operand
-    m_value: Operand
+    m_dst: Operand
+    m_src: Operand
 endop
 
 op PostfixDecrement < Instruction
@@ -688,164 +970,22 @@ op PostfixIncrement < Instruction
     m_src: Operand
 endop
 
-op PutNormalById < Instruction
+op PutById < Instruction
     m_base: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
     m_src: Operand
-    m_cache_index: u32
+    m_kind: PutKind
+    m_cache: PropertyLookupCacheIndex
     m_base_identifier: Optional<IdentifierTableIndex>
 endop
 
-op PutOwnById < Instruction
-    m_base: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutGetterById < Instruction
-    m_base: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutSetterById < Instruction
-    m_base: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutPrototypeById < Instruction
-    m_base: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutNormalByNumericId < Instruction
-    m_base: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutOwnByNumericId < Instruction
-    m_base: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutGetterByNumericId < Instruction
-    m_base: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutSetterByNumericId < Instruction
-    m_base: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutPrototypeByNumericId < Instruction
-    m_base: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutNormalByIdWithThis < Instruction
+op PutByIdWithThis < Instruction
     m_base: Operand
     m_this_value: Operand
-    m_property: IdentifierTableIndex
+    m_property: PropertyKeyTableIndex
     m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutOwnByIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutGetterByIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutSetterByIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutPrototypeByIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: IdentifierTableIndex
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutNormalByNumericIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutOwnByNumericIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutGetterByNumericIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutSetterByNumericIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
-endop
-
-op PutPrototypeByNumericIdWithThis < Instruction
-    m_base: Operand
-    m_this_value: Operand
-    m_property: u32
-    m_src: Operand
-    m_cache_index: u32
+    m_kind: PutKind
+    m_cache: PropertyLookupCacheIndex
 endop
 
 op PutBySpread < Instruction
@@ -853,74 +993,20 @@ op PutBySpread < Instruction
     m_src: Operand
 endop
 
-op PutNormalByValue < Instruction
+op PutByValue < Instruction
     m_base: Operand
     m_property: Operand
     m_src: Operand
+    m_kind: PutKind
     m_base_identifier: Optional<IdentifierTableIndex>
 endop
 
-op PutOwnByValue < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_src: Operand
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutGetterByValue < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_src: Operand
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutSetterByValue < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_src: Operand
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutPrototypeByValue < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_src: Operand
-    m_base_identifier: Optional<IdentifierTableIndex>
-endop
-
-op PutNormalByValueWithThis < Instruction
+op PutByValueWithThis < Instruction
     m_base: Operand
     m_property: Operand
     m_this_value: Operand
     m_src: Operand
-endop
-
-op PutOwnByValueWithThis < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_this_value: Operand
-    m_src: Operand
-endop
-
-op PutGetterByValueWithThis < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_this_value: Operand
-    m_src: Operand
-endop
-
-op PutSetterByValueWithThis < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_this_value: Operand
-    m_src: Operand
-endop
-
-op PutPrototypeByValueWithThis < Instruction
-    m_base: Operand
-    m_property: Operand
-    m_this_value: Operand
-    m_src: Operand
+    m_kind: PutKind
 endop
 
 op PutPrivateById < Instruction
@@ -933,11 +1019,12 @@ op ResolveSuperBase < Instruction
     m_dst: Operand
 endop
 
-op ResolveThisBinding < Instruction
+op ResolveBinding < Instruction
+    m_dst: Operand
+    m_identifier: IdentifierTableIndex
 endop
 
-op RestoreScheduledJump < Instruction
-    @nothrow
+op ResolveThisBinding < Instruction
 endop
 
 op Return < Instruction
@@ -952,21 +1039,27 @@ op RightShift < Instruction
     m_rhs: Operand
 endop
 
-op ScheduleJump < Instruction
-    @terminator
-    m_target: Label
-endop
-
 op SetCompletionType < Instruction
     @nothrow
     m_completion: Operand
-    m_type: Completion::Type
+    m_completion_type: Completion::Type
+endop
+
+op SetFunctionName < Instruction
+    m_function: Operand
+    m_name: Operand
+    m_prefix: FunctionNamePrefix
 endop
 
 op SetGlobal < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
-    m_cache_index: u32
+    m_cache: GlobalVariableCacheIndex
+endop
+
+op SetLexicalEnvironment < Instruction
+    @nothrow
+    m_environment: Operand
 endop
 
 op SetLexicalBinding < Instruction
@@ -975,10 +1068,28 @@ op SetLexicalBinding < Instruction
     m_cache: EnvironmentCoordinate
 endop
 
+op SetResolvedBinding < Instruction
+    m_environment: Operand
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
+endop
+
+op DynamicSetLexicalBinding < Instruction
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
+    m_cache: EnvironmentCoordinateCacheIndex
+endop
+
 op SetVariableBinding < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
     m_cache: EnvironmentCoordinate
+endop
+
+op DynamicSetVariableBinding < Instruction
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
+    m_cache: EnvironmentCoordinateCacheIndex
 endop
 
 op StrictlyEquals < Instruction
@@ -1001,6 +1112,7 @@ endop
 
 op SuperCallWithArgumentArray < Instruction
     m_dst: Operand
+    m_super_constructor: Operand
     m_arguments: Operand
     m_is_synthetic: bool
 endop
@@ -1022,7 +1134,27 @@ op ThrowIfTDZ < Instruction
     m_src: Operand
 endop
 
+op ThrowConstAssignment < Instruction
+endop
+
+op ToBoolean < Instruction
+    @nothrow
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToLength < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToObject < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
 op Typeof < Instruction
+    @nothrow
     m_dst: Operand
     m_src: Operand
 endop
@@ -1031,6 +1163,12 @@ op TypeofBinding < Instruction
     m_dst: Operand
     m_identifier: IdentifierTableIndex
     m_cache: EnvironmentCoordinate
+endop
+
+op DynamicTypeofBinding < Instruction
+    m_dst: Operand
+    m_identifier: IdentifierTableIndex
+    m_cache: EnvironmentCoordinateCacheIndex
 endop
 
 op UnaryMinus < Instruction
@@ -1056,3 +1194,24 @@ op Yield < Instruction
     m_value: Operand
 endop
 
+op YieldIteratorResult < Instruction
+    @terminator
+    @nothrow
+    m_continuation_label: Label
+    m_value: Operand
+endop
+
+op CacheObjectShape < Instruction
+    @nothrow
+    m_object: Operand
+    m_cache: ObjectShapeCacheIndex
+endop
+
+op InitObjectLiteralProperty < Instruction
+    @nothrow
+    m_object: Operand
+    m_property: PropertyKeyTableIndex
+    m_src: Operand
+    m_shape_cache_index: u32
+    m_property_slot: u32
+endop

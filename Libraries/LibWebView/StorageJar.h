@@ -14,7 +14,7 @@
 #include <LibRequests/CacheSizes.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/Forward.h>
-#include <LibWebView/StorageOperationError.h>
+#include <LibWebView/StorageSetResult.h>
 
 namespace WebView {
 
@@ -33,13 +33,15 @@ class WEBVIEW_API StorageJar {
     AK_MAKE_NONMOVABLE(StorageJar);
 
 public:
+    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+
     static ErrorOr<NonnullOwnPtr<StorageJar>> create(Database::Database&);
     static NonnullOwnPtr<StorageJar> create();
 
     ~StorageJar();
 
     Optional<String> get_item(StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key);
-    StorageOperationError set_item(StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key, String const& bottle_value);
+    StorageSetResult set_item(StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key, String const& bottle_value);
     void remove_item(StorageEndpointType storage_endpoint, String const& storage_key, String const& key);
     void remove_items_accessed_since(UnixDateTime);
     void clear_storage_key(StorageEndpointType storage_endpoint, String const& storage_key);
@@ -62,7 +64,7 @@ private:
     class TransientStorage {
     public:
         Optional<String> get_item(StorageLocation const& key);
-        StorageOperationError set_item(StorageLocation const& key, String const& value);
+        StorageSetResult set_item(StorageLocation const& key, String const& value);
         void delete_item(StorageLocation const& key);
         void delete_items_accessed_since(UnixDateTime);
         void clear(StorageEndpointType storage_endpoint, String const& storage_key);
@@ -80,7 +82,7 @@ private:
 
     struct PersistedStorage {
         Optional<String> get_item(StorageLocation const& key);
-        StorageOperationError set_item(StorageLocation const& key, String const& value);
+        StorageSetResult set_item(StorageLocation const& key, String const& value);
         void delete_item(StorageLocation const& key);
         void delete_items_accessed_since(UnixDateTime);
         void clear(StorageEndpointType storage_endpoint, String const& storage_key);
@@ -92,8 +94,6 @@ private:
     };
 
     explicit StorageJar(Optional<PersistedStorage>);
-
-    static ErrorOr<void> upgrade_database(Database::Database&, u32 current_version);
 
     Optional<PersistedStorage> m_persisted_storage;
     TransientStorage m_transient_storage;

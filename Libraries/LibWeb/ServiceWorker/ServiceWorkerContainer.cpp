@@ -5,10 +5,13 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/RootVector.h>
+#include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/Bindings/ServiceWorkerContainerPrototype.h>
+#include <LibWeb/Bindings/ServiceWorkerContainer.h>
 #include <LibWeb/DOMURL/DOMURL.h>
+#include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
@@ -44,6 +47,7 @@ void ServiceWorkerContainer::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_service_worker_client);
+    visitor.visit(m_ready_promise);
 }
 
 GC::Ref<ServiceWorkerContainer> ServiceWorkerContainer::create(JS::Realm& realm)
@@ -52,7 +56,7 @@ GC::Ref<ServiceWorkerContainer> ServiceWorkerContainer::create(JS::Realm& realm)
 }
 
 // https://w3c.github.io/ServiceWorker/#navigator-service-worker-register
-GC::Ref<WebIDL::Promise> ServiceWorkerContainer::register_(TrustedTypes::TrustedScriptURLOrString script_url, RegistrationOptions const& options)
+GC::Ref<WebIDL::Promise> ServiceWorkerContainer::register_(TrustedTypes::TrustedScriptURLOrString script_url, Bindings::RegistrationOptions const& options)
 {
     auto& realm = this->realm();
     // Note: The register(scriptURL, options) method creates or updates a service worker registration for the given scope url.
@@ -106,7 +110,7 @@ GC::Ref<WebIDL::Promise> ServiceWorkerContainer::get_registration(String const& 
 
     // FIXME: Ad-Hoc. Spec should handle this failure.
     if (!storage_key.has_value())
-        return WebIDL::create_rejected_promise(realm, JS::TypeError::create(realm, "Failed to obtain a storage key"sv));
+        return WebIDL::create_rejected_promise(realm, JS::TypeError::create(realm, "Failed to obtain a storage key"_utf16));
 
     // 3. Let clientURL be the result of parsing clientURL with this's relevant settings object’s API base URL.
     auto base_url = HTML::relevant_settings_object(*this).api_base_url();
@@ -114,7 +118,7 @@ GC::Ref<WebIDL::Promise> ServiceWorkerContainer::get_registration(String const& 
 
     // 4. If clientURL is failure, return a promise rejected with a TypeError.
     if (!parsed_client_url.has_value())
-        return WebIDL::create_rejected_promise(realm, JS::TypeError::create(realm, "clientURL is not a valid URL"sv));
+        return WebIDL::create_rejected_promise(realm, JS::TypeError::create(realm, "clientURL is not a valid URL"_utf16));
 
     // 5. Set clientURL’s fragment to null.
     parsed_client_url->set_fragment({});
@@ -148,6 +152,112 @@ GC::Ref<WebIDL::Promise> ServiceWorkerContainer::get_registration(String const& 
     return promise;
 }
 
+// https://w3c.github.io/ServiceWorker/#navigator-service-worker-getRegistrations
+GC::Ref<WebIDL::Promise> ServiceWorkerContainer::get_registrations()
+{
+    auto& realm = this->realm();
+
+    // 1. Let client be this's service worker client.
+    auto client = m_service_worker_client;
+
+    // 2. Let client storage key be the result of running obtain a storage key given client.
+    auto client_storage_key = StorageAPI::obtain_a_storage_key(client);
+
+    if (!client_storage_key.has_value())
+        return WebIDL::create_rejected_promise(realm, JS::TypeError::create(realm, "Failed to obtain a storage key"_utf16));
+
+    // 3. Let promise be a new promise.
+    auto promise = WebIDL::create_promise(realm);
+
+    // 4. Run the following steps in parallel:
+    Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(realm.heap(), [promise, client_storage_key = client_storage_key.release_value()]() {
+        auto& realm = HTML::relevant_realm(promise->promise());
+
+        // 1. Let registrations be a new list.
+        // 2. For each (storage key, scope) → registration of registration map:
+        //     1. If storage key equals client storage key, then append registration to registrations.
+        auto registrations = Registration::for_storage_key(client_storage_key);
+
+        GC::RootVector<GC::Ref<ServiceWorkerRegistration>> registration_objects;
+        for (auto const* registration : registrations)
+            registration_objects.append(HTML::relevant_settings_object(promise->promise()).get_service_worker_registration_object(*registration));
+
+        // 3. Queue a task on promise's relevant settings object's responsible event loop, using the DOM manipulation task source, to run the following steps:
+        HTML::queue_a_task(HTML::Task::Source::DOMManipulation, HTML::relevant_settings_object(promise->promise()).responsible_event_loop(), {}, GC::create_function(realm.heap(), [promise, registration_objects = move(registration_objects)]() {
+            auto& realm = HTML::relevant_realm(promise->promise());
+            HTML::TemporaryExecutionContext const execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+
+            // 1. Let registrationObjects be a new list.
+            GC::RootVector<JS::Value> registration_object_values;
+
+            // 2. For each registration of registrations:
+            for (auto registration_object : registration_objects) {
+                // 1. Let registrationObj be the result of getting the service worker registration object that represents registration in promise's relevant settings object.
+
+                // 2. Append registrationObj to registrationObjects.
+                registration_object_values.append(registration_object);
+            }
+
+            // 3. Resolve promise with a new frozen array of registrationObjects in promise's relevant Realm.
+            auto array = JS::Array::create_from(realm, registration_object_values);
+            MUST(array->set_integrity_level(JS::Object::IntegrityLevel::Frozen));
+            WebIDL::resolve_promise(realm, promise, array);
+        }));
+    }));
+
+    // 5. Return promise.
+    return promise;
+}
+
+// https://w3c.github.io/ServiceWorker/#navigator-service-worker-ready
+GC::Ref<WebIDL::Promise> ServiceWorkerContainer::ready()
+{
+    auto& realm = this->realm();
+
+    // 1. If this’s ready promise is null, then set this’s ready promise to a new promise.
+    if (!m_ready_promise) {
+        m_ready_promise = WebIDL::create_promise(realm);
+
+        // 2. Let readyPromise be this’s ready promise.
+        auto ready_promise = GC::Ref { *m_ready_promise };
+
+        // 3. If readyPromise is pending, run the following substeps in parallel:
+        Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(realm.heap(), [this, ready_promise]() {
+            // 1. Let client be this’s service worker client.
+            auto client = m_service_worker_client;
+
+            // 2. Let storage key be the result of running obtain a storage key given client.
+            auto storage_key = StorageAPI::obtain_a_storage_key(client);
+            if (!storage_key.has_value()) {
+                // AD-HOC: Spec doesn't say what to do here, but we can't continue without a storage key.
+                return;
+            }
+
+            // 3. Let registration be the result of running Match Service Worker Registration given storage key and client’s creation URL.
+            auto maybe_registration = Registration::match(storage_key.value(), client->creation_url);
+
+            // 4. If registration is not null, and registration’s active worker is not null, queue a task on
+            //    readyPromise’s relevant settings object’s responsible event loop, using the DOM manipulation task source,
+            //    to resolve readyPromise with the result of getting the service worker registration object that represents
+            //    registration in readyPromise’s relevant settings object.
+            if (maybe_registration.has_value() && maybe_registration->active_worker() != nullptr) {
+                auto registration_object = HTML::relevant_settings_object(ready_promise->promise()).get_service_worker_registration_object(maybe_registration.value());
+                queue_a_task(HTML::Task::Source::DOMManipulation, nullptr, nullptr, GC::create_function(heap(), [ready_promise, registration_object]() {
+                    auto& realm = HTML::relevant_realm(ready_promise->promise());
+                    HTML::TemporaryExecutionContext const execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+                    WebIDL::resolve_promise(realm, ready_promise, registration_object);
+                }));
+            }
+            // NOTE: The returned ready promise will never reject.
+            //       If it does not resolve in this algorithm, it will eventually resolve when a matching service worker
+            //       registration is registered and its active worker is set. (See the relevant Activate algorithm step.)
+        }));
+    }
+
+    // 4. Return readyPromise.
+    return *m_ready_promise;
+}
+
 // https://w3c.github.io/ServiceWorker/#start-register-algorithm
 void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Optional<URL::URL> script_url, GC::Ref<WebIDL::Promise> promise, HTML::EnvironmentSettingsObject& client, URL::URL referrer, Bindings::WorkerType worker_type, Bindings::ServiceWorkerUpdateViaCache update_via_cache)
 {
@@ -156,7 +266,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
 
     // 1. If scriptURL is failure, reject promise with a TypeError and abort these steps.
     if (!script_url.has_value()) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL is not a valid URL"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL is not a valid URL"_utf16));
         return;
     }
 
@@ -167,7 +277,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
 
     // 3. If scriptURL’s scheme is not one of "http" and "https", reject promise with a TypeError and abort these steps.
     if (!script_url->scheme().is_one_of("http"sv, "https"sv)) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL must have a scheme of 'http' or 'https'"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL must have a scheme of 'http' or 'https'"_utf16));
         return;
     }
 
@@ -177,7 +287,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
         return path.contains("%2f"sv, CaseSensitivity::CaseInsensitive) || path.contains("%5c"sv, CaseSensitivity::CaseInsensitive);
     });
     if (invalid_path.has_value()) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL path must not contain '%2f' or '%5c'"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scriptURL path must not contain '%2f' or '%5c'"_utf16));
         return;
     }
 
@@ -189,7 +299,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
 
     // 6. If scopeURL is failure, reject promise with a TypeError and abort these steps.
     if (!scope_url.has_value()) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL is not a valid URL"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL is not a valid URL"_utf16));
         return;
     }
 
@@ -200,7 +310,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
 
     // 8. If scopeURL’s scheme is not one of "http" and "https", reject promise with a TypeError and abort these steps.
     if (!scope_url->scheme().is_one_of("http"sv, "https"sv)) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL must have a scheme of 'http' or 'https'"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL must have a scheme of 'http' or 'https'"_utf16));
         return;
     }
 
@@ -210,7 +320,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
         return path.contains("%2f"sv, CaseSensitivity::CaseInsensitive) || path.contains("%5c"sv, CaseSensitivity::CaseInsensitive);
     });
     if (invalid_path.has_value()) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL path must not contain '%2f' or '%5c'"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "scopeURL path must not contain '%2f' or '%5c'"_utf16));
         return;
     }
 
@@ -219,7 +329,7 @@ void ServiceWorkerContainer::start_register(Optional<URL::URL> scope_url, Option
 
     // FIXME: Ad-Hoc. Spec should handle this failure here, or earlier.
     if (!storage_key.has_value()) {
-        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "Failed to obtain a storage key"sv));
+        WebIDL::reject_promise(realm, promise, JS::TypeError::create(realm, "Failed to obtain a storage key"_utf16));
         return;
     }
 

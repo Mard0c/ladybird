@@ -7,12 +7,13 @@
 #pragma once
 
 #include <AK/FlyString.h>
+#include <AK/Utf16StringBuilder.h>
 #include <LibWeb/CSS/CSSStyleValue.h>
 
 namespace Web::CSS {
 
 // https://drafts.css-houdini.org/css-typed-om-1/#typedefdef-csskeywordish
-using CSSKeywordish = Variant<String, GC::Root<CSSKeywordValue>>;
+using CSSKeywordish = Variant<String, GC::Ref<CSSKeywordValue>>;
 
 // https://drafts.css-houdini.org/css-typed-om-1/#csskeywordvalue
 class CSSKeywordValue final : public CSSStyleValue {
@@ -28,7 +29,8 @@ public:
     FlyString const& value() const { return m_value; }
     WebIDL::ExceptionOr<void> set_value(FlyString value);
 
-    virtual WebIDL::ExceptionOr<String> to_string() const override;
+    void serialize(Utf16StringBuilder&) const;
+    virtual WebIDL::ExceptionOr<Utf16String> to_string() const override;
     virtual WebIDL::ExceptionOr<NonnullRefPtr<StyleValue const>> create_an_internal_representation(PropertyNameAndID const&, PerformTypeCheck) const override;
 
 private:

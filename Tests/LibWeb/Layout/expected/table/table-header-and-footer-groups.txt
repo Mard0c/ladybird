@@ -1,4 +1,4 @@
-Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-inline
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
   BlockContainer <html> at [1,1] [0+1+0 798 0+1+0] [0+1+0 218 0+1+0] [BFC] children: not-inline
     TableWrapper <(anonymous)> at [9,9] [8+0+0 302 0+0+488] [8+0+0 202 0+0+8] [BFC] children: not-inline
       Box <body.table> at [10,10] table-box [0+1+0 300 0+1+0] [0+1+0 200 0+1+0] [TFC] children: not-inline
@@ -28,5 +28,5 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
             PaintableWithLines (BlockContainer(anonymous)) [10,110 300x100]
               TextPaintable (TextNode<#text>)
 
-SC for Viewport<#document> [0,0 800x600] [children: 1] (z-index: auto)
- SC for BlockContainer<HTML> [1,1 798x218] [children: 0] (z-index: auto)
+SC for Viewport<#document> [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<HTML> [1,1 798x218] (z-index: auto)

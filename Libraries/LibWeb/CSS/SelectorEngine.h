@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <AK/Array.h>
+#include <AK/HashMap.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/DOM/Element.h>
 
@@ -16,14 +18,85 @@ enum class SelectorKind {
     Relative,
 };
 
+enum class HasMatchResult : u8 {
+    Matched,
+    NotMatched,
+};
+
+struct HasResultCacheKey {
+    CSS::Selector const* selector;
+    GC::Ptr<DOM::Element const> element;
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        visitor.visit(element);
+    }
+
+    bool operator==(HasResultCacheKey const&) const = default;
+};
+
+struct HasResultCacheKeyTraits : Traits<HasResultCacheKey> {
+    static unsigned hash(HasResultCacheKey const& key)
+    {
+        return pair_int_hash(ptr_hash(key.selector), ptr_hash(key.element.ptr()));
+    }
+};
+
+using HasResultCache = HashMap<HasResultCacheKey, HasMatchResult, HasResultCacheKeyTraits>;
+
+enum class HasFastRejectFilterTraversalType : u8 {
+    Children,
+    Descendants,
+};
+
+struct HasFastRejectFilterKey {
+    GC::Ptr<DOM::Element const> element;
+    HasFastRejectFilterTraversalType traversal_type;
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        visitor.visit(element);
+    }
+
+    bool operator==(HasFastRejectFilterKey const&) const = default;
+};
+
+struct HasFastRejectFilterKeyTraits : Traits<HasFastRejectFilterKey> {
+    static unsigned hash(HasFastRejectFilterKey const& key)
+    {
+        return pair_int_hash(ptr_hash(key.element.ptr()), to_underlying(key.traversal_type));
+    }
+};
+
+struct HasFastRejectFilter {
+    static constexpr size_t bucket_count = 64;
+
+    bool seen_once { false };
+    bool populated { false };
+    Array<u64, bucket_count> buckets {};
+
+    void add(u32 hash);
+    [[nodiscard]] bool may_contain(u32 hash) const;
+};
+
+using HasFastRejectFilterCache = HashMap<HasFastRejectFilterKey, HasFastRejectFilter, HasFastRejectFilterKeyTraits>;
+
 struct MatchContext {
     GC::Ptr<CSS::CSSStyleSheet const> style_sheet_for_rule {};
     GC::Ptr<DOM::Element const> subject {};
-    GC::Ptr<DOM::Element const> slotted_element {}; // Only set when matching a ::slotted() pseudo-element
+    GC::Ptr<DOM::ShadowRoot const> rule_shadow_root {}; // Shadow root the matched rule belongs to
     bool collect_per_element_selector_involvement_metadata { false };
-    CSS::PseudoClassBitmap attempted_pseudo_class_matches {};
+    // True while we are evaluating the argument of a :has() pseudo-class.
+    // Elements visited by selector walks (descendants, siblings, etc.) while
+    // this is set get marked as in_has_scope so the invalidation walker can
+    // later terminate once it leaves the scope. Transparent to callers; set
+    // by matches_has_pseudo_class with a ScopeGuard.
+    bool inside_has_argument_match { false };
+    HasResultCache* has_result_cache { nullptr };
+    HasFastRejectFilterCache* has_fast_reject_filter_cache { nullptr };
 };
 
-bool matches(CSS::Selector const&, DOM::Element const&, GC::Ptr<DOM::Element const> shadow_host, MatchContext& context, Optional<CSS::PseudoElement> = {}, GC::Ptr<DOM::ParentNode const> scope = {}, SelectorKind selector_kind = SelectorKind::Normal, GC::Ptr<DOM::Element const> anchor = nullptr);
+bool matches(CSS::Selector const&, DOM::AbstractElement const&, GC::Ptr<DOM::Element const> shadow_host, MatchContext& context, GC::Ptr<DOM::ParentNode const> scope = {}, SelectorKind selector_kind = SelectorKind::Normal, GC::Ptr<DOM::Element const> anchor = nullptr);
+bool matches_originating_element_for_pseudo_element(CSS::Selector const&, CSS::PseudoElement, DOM::AbstractElement const&, GC::Ptr<DOM::Element const> shadow_host, MatchContext&, GC::Ptr<DOM::ParentNode const> scope = {});
 
 }

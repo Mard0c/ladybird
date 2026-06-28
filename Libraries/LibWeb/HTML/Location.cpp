@@ -13,11 +13,12 @@
 #include <LibJS/Runtime/PropertyDescriptor.h>
 #include <LibJS/Runtime/PropertyKey.h>
 #include <LibURL/Parser.h>
-#include <LibWeb/Bindings/LocationPrototype.h>
+#include <LibWeb/Bindings/Location.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/CrossOrigin/AbstractOperations.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/Location.h>
-#include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Navigation.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/WebIDL/DOMException.h>
@@ -38,6 +39,8 @@ void Location::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_default_properties);
+    for (auto& descriptor : m_cross_origin_property_descriptor_map)
+        descriptor.value.visit_edges(visitor);
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
@@ -60,7 +63,12 @@ void Location::initialize(JS::Realm& realm)
         .enumerable = false,
         .configurable = false,
     };
-    MUST(internal_define_own_property(vm.names.valueOf, value_of_property_descriptor));
+
+    // NB: The spec initializes Location non-lazily, so this creation-time define always observes a same-origin Location.
+    //     Pass the known-absent current descriptor explicitly because our lazy initialization may otherwise make
+    //     OrdinaryDefineOwnProperty ask Location's custom [[GetOwnProperty]], which can take the cross-origin path.
+    Optional<JS::PropertyDescriptor> no_current_property;
+    MUST(JS::Object::internal_define_own_property(vm.names.valueOf, value_of_property_descriptor, &no_current_property));
 
     // 4. Perform ! location.[[DefineOwnProperty]](%Symbol.toPrimitive%, { [[Value]]: undefined, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }).
     auto to_primitive_property_descriptor = JS::PropertyDescriptor {
@@ -69,10 +77,9 @@ void Location::initialize(JS::Realm& realm)
         .enumerable = false,
         .configurable = false,
     };
-    MUST(internal_define_own_property(vm.well_known_symbol_to_primitive(), to_primitive_property_descriptor));
+    MUST(JS::Object::internal_define_own_property(vm.well_known_symbol_to_primitive(), to_primitive_property_descriptor, &no_current_property));
 
     // 5. Set the value of the [[DefaultProperties]] internal slot of location to location.[[OwnPropertyKeys]]().
-    // NOTE: In LibWeb this happens before the ESO is set up, so we must avoid location's custom [[OwnPropertyKeys]].
     m_default_properties.extend(MUST(Object::internal_own_property_keys()));
 }
 
@@ -536,7 +543,8 @@ void Location::reload() const
     // FIXME: 3. If document's origin is not same origin-domain with the entry settings object's origin, then throw a "SecurityError" DOMException.
 
     // 4. Reload document's node navigable.
-    document->navigable()->reload();
+    if (auto navigable = document->navigable())
+        navigable->reload();
 }
 
 // https://html.spec.whatwg.org/multipage/history.html#dom-location-replace
@@ -626,7 +634,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> Location::internal_get_o
         // FIXME: This doesn't align with what the other browsers do. Spec issue: https://github.com/whatwg/html/issues/4157
         auto property_key_value = property_key.is_symbol()
             ? JS::Value { property_key.as_symbol() }
-            : JS::PrimitiveString::create(vm, property_key.to_string());
+            : JS::PrimitiveString::create(vm, property_key.to_utf16_string());
         if (m_default_properties.contains_slow(property_key_value))
             descriptor->configurable = true;
 

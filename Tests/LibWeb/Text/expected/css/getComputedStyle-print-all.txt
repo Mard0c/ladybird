@@ -10,6 +10,7 @@ color-interpolation: srgb
 color-scheme: normal
 cursor: auto
 direction: ltr
+dominant-baseline: auto
 empty-cells: show
 fill: rgb(0, 0, 0)
 fill-opacity: 1
@@ -18,6 +19,7 @@ font-family: serif
 font-feature-settings: normal
 font-kerning: auto
 font-language-override: normal
+font-optical-sizing: auto
 font-size: 16px
 font-style: normal
 font-variant-alternates: normal
@@ -44,6 +46,7 @@ overflow-wrap: normal
 paint-order: normal
 pointer-events: auto
 quotes: auto
+scrollbar-color: auto
 shape-rendering: auto
 stroke: none
 stroke-dasharray: none
@@ -57,6 +60,7 @@ tab-size: 8
 text-align: start
 text-anchor: start
 text-decoration-line: none
+text-decoration-skip-ink: auto
 text-indent: 0px
 text-justify: auto
 text-rendering: auto
@@ -85,6 +89,7 @@ animation-fill-mode: none
 animation-iteration-count: 1
 animation-name: none
 animation-play-state: running
+animation-timeline: auto
 animation-timing-function: ease
 appearance: none
 aspect-ratio: auto
@@ -99,7 +104,7 @@ background-position-x: 0%
 background-position-y: 0%
 background-repeat: repeat
 background-size: auto
-block-size: 1515px
+block-size: 1590px
 border-block-end-color: rgb(0, 0, 0)
 border-block-end-style: none
 border-block-end-width: 0px
@@ -149,6 +154,7 @@ column-height: auto
 column-span: none
 column-width: auto
 contain: none
+container-name: none
 container-type: normal
 content: normal
 content-visibility: visible
@@ -185,7 +191,7 @@ grid-row-start: auto
 grid-template-areas: none
 grid-template-columns: none
 grid-template-rows: none
-height: 2805px
+height: 2895px
 inline-size: 784px
 inset-block-end: auto
 inset-block-start: auto
@@ -229,8 +235,16 @@ order: 0
 outline-color: rgb(0, 0, 0)
 outline-offset: 0px
 outline-style: none
-outline-width: 0px
+outline-width: 3px
 overflow-block: visible
+overflow-clip-margin-block-end: 0px
+overflow-clip-margin-block-start: 0px
+overflow-clip-margin-bottom: 0px
+overflow-clip-margin-inline-end: 0px
+overflow-clip-margin-inline-start: 0px
+overflow-clip-margin-left: 0px
+overflow-clip-margin-right: 0px
+overflow-clip-margin-top: 0px
 overflow-inline: visible
 overflow-x: visible
 overflow-y: visible
@@ -245,19 +259,38 @@ padding-top: 0px
 perspective: none
 perspective-origin: 50% 50%
 position: static
-position-anchor: auto
+position-anchor: normal
 position-area: none
 position-try-fallbacks: none
 position-try-order: normal
 position-visibility: anchors-visible
 r: 0px
+resize: none
 right: auto
 rotate: none
 row-gap: normal
 rx: auto
 ry: auto
 scale: none
-scrollbar-color: auto
+scroll-behavior: auto
+scroll-margin-block-end: 0px
+scroll-margin-block-start: 0px
+scroll-margin-bottom: 0px
+scroll-margin-inline-end: 0px
+scroll-margin-inline-start: 0px
+scroll-margin-left: 0px
+scroll-margin-right: 0px
+scroll-margin-top: 0px
+scroll-padding-block-end: 0px
+scroll-padding-block-start: 0px
+scroll-padding-bottom: 0px
+scroll-padding-inline-end: 0px
+scroll-padding-inline-start: 0px
+scroll-padding-left: 0px
+scroll-padding-right: 0px
+scroll-padding-top: 0px
+scroll-timeline-axis: block
+scroll-timeline-name: none
 scrollbar-gutter: auto
 scrollbar-width: auto
 shape-image-threshold: 0
@@ -270,6 +303,7 @@ text-decoration-color: rgb(0, 0, 0)
 text-decoration-style: solid
 text-decoration-thickness: auto
 text-overflow: clip
+timeline-scope: none
 top: auto
 touch-action: auto
 transform: none
@@ -285,6 +319,9 @@ translate: none
 unicode-bidi: normal
 user-select: auto
 vertical-align: baseline
+view-timeline-axis: block
+view-timeline-inset: auto
+view-timeline-name: none
 view-transition-name: none
 white-space-trim: none
 width: 784px

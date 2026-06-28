@@ -7,6 +7,8 @@
 
 #include <AK/GenericLexer.h>
 #include <AK/TypeCasts.h>
+#include <LibHTTP/HTTP.h>
+#include <LibHTTP/HeaderList.h>
 #include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Error.h>
@@ -19,12 +21,10 @@
 #include <LibWeb/Fetch/Body.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 #include <LibWeb/FileAPI/Blob.h>
 #include <LibWeb/FileAPI/File.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/Infra/JSON.h>
-#include <LibWeb/Infra/Strings.h>
 #include <LibWeb/MimeSniff/MimeType.h>
 #include <LibWeb/Streams/ReadableStream.h>
 #include <LibWeb/WebIDL/Promise.h>
@@ -173,7 +173,7 @@ WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> BodyMixin::text() const
         VERIFY(decoder.has_value());
 
         auto utf8_text = MUST(TextCodec::convert_input_to_utf8_using_given_decoder_unless_there_is_a_byte_order_mark(*decoder, bytes));
-        return JS::PrimitiveString::create(vm, move(utf8_text));
+        return JS::PrimitiveString::create(vm, Utf16String::from_utf8(utf8_text));
     }));
 }
 
@@ -302,10 +302,10 @@ static MultipartParsingErrorOr<MultiPartFormDataHeader> parse_multipart_form_dat
         auto header_name = lexer.consume_until(is_any_of("\n\r:"sv));
 
         // 3. Remove any HTTP tab or space bytes from the start or end of header name.
-        header_name = header_name.trim(Infrastructure::HTTP_TAB_OR_SPACE, TrimMode::Both);
+        header_name = header_name.trim(HTTP::HTTP_TAB_OR_SPACE, TrimMode::Both);
 
         // 4. If header name does not match the field-name token production, return failure.
-        if (!Infrastructure::is_header_name(header_name.bytes()))
+        if (!HTTP::is_header_name(header_name.bytes()))
             return MultipartParsingError { MUST(String::formatted("Invalid header name {}", header_name)) };
 
         // 5. If the byte at position is not 0x3A (:), return failure.
@@ -314,7 +314,7 @@ static MultipartParsingErrorOr<MultiPartFormDataHeader> parse_multipart_form_dat
             return MultipartParsingError { MUST(String::formatted("Expected : at position {}", lexer.tell())) };
 
         // 7. Collect a sequence of bytes that are HTTP tab or space bytes given position. (Do nothing with those bytes.)
-        lexer.ignore_while(Infrastructure::is_http_tab_or_space);
+        lexer.ignore_while(HTTP::is_http_tab_or_space);
 
         // 8. Byte-lowercase header name and switch on the result:
         // -> `content-disposition`
@@ -347,18 +347,18 @@ static MultipartParsingErrorOr<MultiPartFormDataHeader> parse_multipart_form_dat
         // -> `content-type`
         else if (header_name.equals_ignoring_ascii_case("content-type"sv)) {
             // 1. Let header value be the result of collecting a sequence of bytes that are not 0x0A (LF) or 0x0D (CR), given position.
-            auto header_value = lexer.consume_until(Infrastructure::is_http_newline);
+            auto header_value = lexer.consume_until(HTTP::is_http_newline);
 
             // 2. Remove any HTTP tab or space bytes from the end of header value.
-            header_value = header_value.trim(Infrastructure::HTTP_TAB_OR_SPACE, TrimMode::Right);
+            header_value = header_value.trim(HTTP::HTTP_TAB_OR_SPACE, TrimMode::Right);
 
             // 3. Set contentType to the isomorphic decoding of header value.
-            header.content_type = Infra::isomorphic_decode(header_value.bytes());
+            header.content_type = TextCodec::isomorphic_decode(header_value);
         }
         // -> Otherwise
         else {
             // 1. Collect a sequence of bytes that are not 0x0A (LF) or 0x0D (CR), given position. (Do nothing with those bytes.)
-            lexer.ignore_until(Infrastructure::is_http_newline);
+            lexer.ignore_until(HTTP::is_http_newline);
         }
 
         // 9. If position does not point to a sequence of bytes starting with 0x0D 0x0A (CR LF), return failure. Otherwise, advance position by 2 (past the newline).
@@ -369,7 +369,7 @@ static MultipartParsingErrorOr<MultiPartFormDataHeader> parse_multipart_form_dat
 }
 
 // https://andreubotella.github.io/multipart-form-data/#multipart-form-data-parser
-MultipartParsingErrorOr<Vector<XHR::FormDataEntry>> parse_multipart_form_data(JS::Realm& realm, StringView input, MimeSniff::MimeType const& mime_type)
+MultipartParsingErrorOr<GC::ConservativeVector<XHR::FormDataEntry>> parse_multipart_form_data(JS::Realm& realm, StringView input, MimeSniff::MimeType const& mime_type)
 {
     // 1. Assert: mimeType’s essence is "multipart/form-data".
     VERIFY(mime_type.essence() == "multipart/form-data"sv);
@@ -381,7 +381,7 @@ MultipartParsingErrorOr<Vector<XHR::FormDataEntry>> parse_multipart_form_data(JS
     auto boundary = maybe_boundary.release_value();
 
     // 3. Let entry list be an empty entry list.
-    Vector<XHR::FormDataEntry> entry_list;
+    GC::ConservativeVector<XHR::FormDataEntry> entry_list;
 
     // 4. Let position be a pointer to a byte in input, initially pointing at the first byte.
     GenericLexer lexer(input);
@@ -444,11 +444,11 @@ MultipartParsingErrorOr<Vector<XHR::FormDataEntry>> parse_multipart_form_data(JS
             }
 
             // 3. Let value be a new File object with name filename, type contentType, and body body.
-            auto blob = FileAPI::Blob::create(realm, MUST(ByteBuffer::copy(body.bytes())), header.content_type.release_value());
-            FileAPI::FilePropertyBag options {};
-            options.type = blob->type();
-            auto file = MUST(FileAPI::File::create(realm, { GC::make_root(blob) }, header.filename.release_value(), move(options)));
-            value = GC::make_root(file);
+            auto content_type = header.content_type.release_value();
+            auto blob = FileAPI::Blob::create(realm, MUST(ByteBuffer::copy(body.bytes())), content_type);
+            Bindings::FilePropertyBag options {};
+            options.type = move(content_type);
+            value = MUST(FileAPI::File::create(realm, { { blob } }, header.filename.release_value(), move(options)));
         }
         // 11. Otherwise:
         else {

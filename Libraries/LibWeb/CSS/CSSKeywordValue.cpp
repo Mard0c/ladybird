@@ -5,12 +5,13 @@
  */
 
 #include "CSSKeywordValue.h"
-#include <LibWeb/Bindings/CSSKeywordValuePrototype.h>
+#include <LibWeb/Bindings/CSSKeywordValue.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/Keyword.h>
 #include <LibWeb/CSS/PropertyNameAndID.h>
 #include <LibWeb/CSS/Serialize.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
+#include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
@@ -59,12 +60,19 @@ WebIDL::ExceptionOr<void> CSSKeywordValue::set_value(FlyString value)
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#keywordvalue-serialization
-WebIDL::ExceptionOr<String> CSSKeywordValue::to_string() const
+void CSSKeywordValue::serialize(Utf16StringBuilder& builder) const
 {
     // To serialize a CSSKeywordValue this:
     // 1. Return this’s value internal slot.
     // AD-HOC: Serialize it as an identifier. Spec issue: https://github.com/w3c/csswg-drafts/issues/12545
-    return serialize_an_identifier(m_value);
+    builder.append(Utf16String::from_utf8_without_validation(serialize_an_identifier(m_value)));
+}
+
+WebIDL::ExceptionOr<Utf16String> CSSKeywordValue::to_string() const
+{
+    Utf16StringBuilder builder;
+    serialize(builder);
+    return builder.to_string();
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#create-an-internal-representation
@@ -97,8 +105,15 @@ WebIDL::ExceptionOr<NonnullRefPtr<StyleValue const>> CSSKeywordValue::create_an_
     // NB: Non-applicable.
 
     //     Return the value.
-    if (auto keyword = keyword_from_string(m_value); keyword.has_value())
+    if (auto keyword = keyword_from_string(m_value); keyword.has_value()) {
+        if (!is_css_wide_keyword(m_value)) {
+            // NB: Non-css-wide keyword `display` values are represented internally by DisplayStyleValue, not KeywordStyleValue.
+            if (property.id() == PropertyID::Display)
+                return DisplayStyleValue::create(Display::from_keyword(keyword.release_value()));
+        }
+
         return KeywordStyleValue::create(*keyword);
+    }
     return CustomIdentStyleValue::create(m_value);
 }
 
@@ -108,8 +123,8 @@ GC::Ref<CSSKeywordValue> rectify_a_keywordish_value(JS::Realm& realm, CSSKeyword
     // To rectify a keywordish value val, perform the following steps:
     return keywordish.visit(
         // 1. If val is a CSSKeywordValue, return val.
-        [](GC::Root<CSSKeywordValue> const& value) -> GC::Ref<CSSKeywordValue> {
-            return *value;
+        [](GC::Ref<CSSKeywordValue> const& value) -> GC::Ref<CSSKeywordValue> {
+            return value;
         },
 
         // 2. If val is a DOMString, return a new CSSKeywordValue with its value internal slot set to val.

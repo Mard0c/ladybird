@@ -8,13 +8,17 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/ByteString.h>
 #include <AK/Error.h>
 #include <AK/Forward.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
+#include <AK/Time.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <LibGC/Ptr.h>
+#include <LibHTTP/Cache/CacheMode.h>
+#include <LibHTTP/HeaderList.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibURL/Origin.h>
@@ -22,7 +26,6 @@
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 
 namespace Web::Fetch::Infrastructure {
 
@@ -32,15 +35,6 @@ class WEB_API Request final : public JS::Cell {
     GC_DECLARE_ALLOCATOR(Request);
 
 public:
-    enum class CacheMode {
-        Default,
-        NoStore,
-        Reload,
-        NoCache,
-        ForceCache,
-        OnlyIfCached,
-    };
-
     enum class CredentialsMode {
         Omit,
         SameOrigin,
@@ -171,14 +165,14 @@ public:
 
     [[nodiscard]] static GC::Ref<Request> create(JS::VM&);
 
-    [[nodiscard]] ReadonlyBytes method() const LIFETIME_BOUND { return m_method; }
-    void set_method(ByteBuffer method) { m_method = move(method); }
+    [[nodiscard]] ByteString const& method() const { return m_method; }
+    void set_method(ByteString method) { m_method = move(method); }
 
     [[nodiscard]] bool local_urls_only() const { return m_local_urls_only; }
     void set_local_urls_only(bool local_urls_only) { m_local_urls_only = local_urls_only; }
 
-    [[nodiscard]] GC::Ref<HeaderList> header_list() const { return m_header_list; }
-    void set_header_list(GC::Ref<HeaderList> header_list) { m_header_list = header_list; }
+    NonnullRefPtr<HTTP::HeaderList> const& header_list() const { return m_header_list; }
+    void set_header_list(NonnullRefPtr<HTTP::HeaderList> header_list) { m_header_list = move(header_list); }
 
     [[nodiscard]] bool unsafe_request() const { return m_unsafe_request; }
     void set_unsafe_request(bool unsafe_request) { m_unsafe_request = unsafe_request; }
@@ -240,8 +234,8 @@ public:
     [[nodiscard]] bool use_url_credentials() const { return m_use_url_credentials; }
     void set_use_url_credentials(bool use_url_credentials) { m_use_url_credentials = use_url_credentials; }
 
-    [[nodiscard]] CacheMode cache_mode() const { return m_cache_mode; }
-    void set_cache_mode(CacheMode cache_mode) { m_cache_mode = cache_mode; }
+    [[nodiscard]] HTTP::CacheMode cache_mode() const { return m_cache_mode; }
+    void set_cache_mode(HTTP::CacheMode cache_mode) { m_cache_mode = cache_mode; }
 
     [[nodiscard]] RedirectMode redirect_mode() const { return m_redirect_mode; }
     void set_redirect_mode(RedirectMode redirect_mode) { m_redirect_mode = redirect_mode; }
@@ -307,7 +301,7 @@ public:
     [[nodiscard]] RedirectTaint redirect_taint() const;
 
     [[nodiscard]] String serialize_origin() const;
-    [[nodiscard]] ByteBuffer byte_serialize_origin() const;
+    [[nodiscard]] ByteString byte_serialize_origin() const;
 
     [[nodiscard]] GC::Ref<Request> clone(JS::Realm&) const;
 
@@ -328,14 +322,16 @@ public:
         m_pending_responses.remove_first_matching([&](auto gc_ptr) { return gc_ptr == pending_response; });
     }
 
+    UnixDateTime request_time() const { return m_request_time; }
+
 private:
-    explicit Request(GC::Ref<HeaderList>);
+    explicit Request(NonnullRefPtr<HTTP::HeaderList>);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
     // https://fetch.spec.whatwg.org/#concept-request-method
     // A request has an associated method (a method). Unless stated otherwise it is `GET`.
-    ByteBuffer m_method { ByteBuffer::copy("GET"sv.bytes()).release_value() };
+    ByteString m_method { "GET"sv };
 
     // https://fetch.spec.whatwg.org/#local-urls-only-flag
     // A request has an associated local-URLs-only flag. Unless stated otherwise it is unset.
@@ -343,7 +339,7 @@ private:
 
     // https://fetch.spec.whatwg.org/#concept-request-header-list
     // A request has an associated header list (a header list). Unless stated otherwise it is empty.
-    GC::Ref<HeaderList> m_header_list;
+    NonnullRefPtr<HTTP::HeaderList> m_header_list;
 
     // https://fetch.spec.whatwg.org/#unsafe-request-flag
     // A request has an associated unsafe-request flag. Unless stated otherwise it is unset.
@@ -455,7 +451,7 @@ private:
     // https://fetch.spec.whatwg.org/#concept-request-cache-mode
     // A request has an associated cache mode, which is "default", "no-store", "reload", "no-cache", "force-cache", or
     // "only-if-cached". Unless stated otherwise, it is "default".
-    CacheMode m_cache_mode { CacheMode::Default };
+    HTTP::CacheMode m_cache_mode { HTTP::CacheMode::Default };
 
     // https://fetch.spec.whatwg.org/#concept-request-redirect-mode
     // A request has an associated redirect mode, which is "follow", "error", or "manual". Unless stated otherwise, it
@@ -522,6 +518,7 @@ private:
 
     // Non-standard
     Vector<GC::Ref<Fetching::PendingResponse>> m_pending_responses;
+    UnixDateTime m_request_time;
 };
 
 WEB_API StringView request_destination_to_string(Request::Destination);

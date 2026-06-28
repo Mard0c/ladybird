@@ -1,4 +1,4 @@
-Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-inline
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
   BlockContainer <html> at [0,0] [0+0+0 800 0+0+0] [0+0+0 140 0+0+0] [BFC] children: not-inline
     BlockContainer <body> at [8,16] [8+0+0 784 0+0+8] [8+0+0 108 0+0+16] children: not-inline
       BlockContainer <div.box> at [18,26] floating [0+10+0 200 0+10+100] [0+10+0 100 0+10+0] [BFC] children: not-inline
@@ -36,7 +36,7 @@ Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-
 
 ViewportPaintable (Viewport<#document>) [0,0 800x600]
   PaintableWithLines (BlockContainer<HTML>) [0,0 800x140]
-    PaintableWithLines (BlockContainer<BODY>) [8,16 784x108] overflow: [8,16 784x120]
+    PaintableWithLines (BlockContainer<BODY>) [8,16 784x108]
       PaintableWithLines (BlockContainer<DIV>.box) [8,16 220x120]
       PaintableWithLines (BlockContainer<UL>) [8,16 784x108]
         PaintableWithLines (ListItemBox<LI>) [48,16 744x18]
@@ -58,5 +58,5 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
           MarkerPaintable (ListItemMarkerBox(anonymous)) [314,112 6x6]
           TextPaintable (TextNode<#text>)
 
-SC for Viewport<#document> [0,0 800x600] [children: 1] (z-index: auto)
- SC for BlockContainer<HTML> [0,0 800x140] [children: 0] (z-index: auto)
+SC for Viewport<#document> [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<HTML> [0,0 800x140] (z-index: auto)

@@ -16,6 +16,7 @@
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
+#include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/WorkerGlobalScope.h>
 #include <LibWeb/Infra/Strings.h>
@@ -320,7 +321,7 @@ Directives::Directive::Result should_navigation_response_to_navigation_request_o
     GC::Ref<Fetch::Infrastructure::Response> navigation_response,
     GC::Ref<PolicyList> response_csp_list,
     Directives::Directive::NavigationType navigation_type,
-    GC::Ref<HTML::Navigable> target)
+    GC::Ref<HTML::LocalNavigable> target)
 {
     // 1. Let result be "Allowed".
     auto result = Directives::Directive::Result::Allowed;
@@ -463,14 +464,14 @@ Directives::Directive::Result should_elements_inline_type_behavior_be_blocked_by
 }
 
 // https://w3c.github.io/webappsec-csp/#can-compile-strings
-JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Realm& realm, ReadonlySpan<String> parameter_strings, StringView body_string, StringView code_string, JS::CompilationType compilation_type, ReadonlySpan<JS::Value> parameter_args, JS::Value body_arg)
+JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Realm& realm, ReadonlySpan<Utf16String> parameter_strings, Utf16View body_string, Utf16View code_string, JS::CompilationType compilation_type, ReadonlySpan<JS::Value> parameter_args, JS::Value body_arg)
 {
     Utf16String source_string;
 
     // 1. If compilationType is "TIMER", then:
     if (compilation_type == JS::CompilationType::Timer) {
         // 1. Let sourceString be codeString.
-        source_string = Utf16String::from_utf8(code_string);
+        source_string = Utf16String::from_utf16(code_string);
     }
     // 2. Else:
     else {
@@ -478,7 +479,7 @@ JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Rea
         auto const compilation_sink = compilation_type == JS::CompilationType::Function ? TrustedTypes::InjectionSink::Function : TrustedTypes::InjectionSink::Eval;
 
         // 2. Let isTrusted be true if bodyArg implements TrustedScript, and false otherwise.
-        auto is_trusted = body_arg.is_object() && is<TrustedTypes::TrustedScript>(body_arg.as_object());
+        auto is_trusted = body_arg.is<TrustedTypes::TrustedScript>();
 
         // 3. If isTrusted is true then:
         if (is_trusted) {
@@ -498,9 +499,9 @@ JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Rea
                 auto const& arg = parameter_args[i];
 
                 // 2. If arg implements TrustedScript, then:
-                if (arg.is_object() && is<TrustedTypes::TrustedScript>(arg.as_object())) {
+                if (auto trusted_script = arg.as_if<TrustedTypes::TrustedScript>()) {
                     // 1. if parameterStrings[index] is not equal to arg’s data, set isTrusted to false.
-                    if (parameter_strings[i] != as<TrustedTypes::TrustedScript>(arg.as_object()).to_string()) {
+                    if (parameter_strings[i] != trusted_script->to_string()) {
                         is_trusted = false;
                         break;
                     }
@@ -516,8 +517,8 @@ JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Rea
         // 5. Let sourceToValidate be a new TrustedScript object created in realm whose data is set to codeString
         //    if isTrusted is true, and codeString otherwise.
         auto const source_to_validate = is_trusted
-            ? TrustedTypes::TrustedScriptOrString(realm.create<TrustedTypes::TrustedScript>(realm, Utf16String::from_utf8(code_string)))
-            : Utf16String::from_utf8(code_string);
+            ? TrustedTypes::TrustedScriptOrString(realm.create<TrustedTypes::TrustedScript>(realm, Utf16String::from_utf16(code_string)))
+            : Utf16String::from_utf16(code_string);
 
         // 6. Let sourceString be the result of executing the Get Trusted Type compliant string algorithm,
         //    with TrustedScript, realm, sourceToValidate, compilationSink, and 'script'.
@@ -530,13 +531,13 @@ JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Rea
 
         // 7. If the algorithm throws an error, throw an EvalError.
         if (maybe_source_string.is_error()) {
-            return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"sv);
+            return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"_utf16);
         }
         source_string = maybe_source_string.release_value();
 
         // 8. If sourceString is not equal to codeString, throw an EvalError.
         if (source_string != code_string)
-            return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"sv);
+            return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"_utf16);
     }
 
     // 3. Let result be "Allowed".
@@ -612,7 +613,7 @@ JS::ThrowCompletionOr<void> ensure_csp_does_not_block_string_compilation(JS::Rea
 
     // 6. If result is "Blocked", throw an EvalError exception.
     if (result == Directives::Directive::Result::Blocked) {
-        return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"sv);
+        return realm.vm().throw_completion<JS::EvalError>("Blocked by Content Security Policy"_utf16);
     }
 
     return {};

@@ -1,4 +1,4 @@
-Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] children: not-inline
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
   BlockContainer <html> at [1,1] [0+1+0 798 0+1+0] [0+1+0 146 0+1+0] [BFC] children: not-inline
     Box <body> at [10,10] flex-container(column) [8+1+0 780 0+1+8] [8+1+0 128 0+1+8] [FFC] children: not-inline
       BlockContainer <(anonymous)> (not painted) [BFC] children: inline
@@ -53,8 +53,8 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
         PaintableBox (Box<DIV>.inner) [11,11 200x20]
           PaintableWithLines (BlockContainer(anonymous)) [12,12 19.125x18]
             TextPaintable (TextNode<#text>)
-      PaintableWithLines (BlockContainer<DIV>.percentage) [10,32 52x22] overflow: [11,33 87.671875x20]
-        PaintableBox (Box<DIV>.inner) [11,33 50x20] overflow: [12,34 86.671875x18]
+      PaintableWithLines (BlockContainer<DIV>.percentage) [10,32 52x22]
+        PaintableBox (Box<DIV>.inner) [11,33 50x20]
           PaintableWithLines (BlockContainer(anonymous)) [12,34 86.671875x18]
             TextPaintable (TextNode<#text>)
       PaintableWithLines (BlockContainer<DIV>.fit-content) [10,54 90.765625x22]
@@ -70,5 +70,5 @@ ViewportPaintable (Viewport<#document>) [0,0 800x600]
           PaintableWithLines (BlockContainer(anonymous)) [12,100 60.90625x36]
             TextPaintable (TextNode<#text>)
 
-SC for Viewport<#document> [0,0 800x600] [children: 1] (z-index: auto)
- SC for BlockContainer<HTML> [1,1 798x146] [children: 0] (z-index: auto)
+SC for Viewport<#document> [0,0 800x600] (z-index: auto)
+ SC for BlockContainer<HTML> [1,1 798x146] (z-index: auto)

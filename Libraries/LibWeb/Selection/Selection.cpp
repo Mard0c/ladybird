@@ -7,13 +7,15 @@
 
 #include <LibUnicode/Segmenter.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/Bindings/SelectionPrototype.h>
+#include <LibWeb/Bindings/Selection.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/Position.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/GraphemeEdgeTracker.h>
+#include <LibWeb/HTML/FormAssociatedElement.h>
+#include <LibWeb/Painting/Paintable.h>
 #include <LibWeb/Selection/Selection.h>
 
 namespace Web::Selection {
@@ -299,8 +301,10 @@ WebIDL::ExceptionOr<void> Selection::extend(GC::Ref<DOM::Node> node, unsigned of
     // 4. Let newRange be a new range.
     auto new_range = DOM::Range::create(*m_document);
 
+    auto old_anchor_and_new_focus_have_the_same_shadow_including_root = &old_anchor_node.shadow_including_root() == &new_focus_node->shadow_including_root();
+
     // 5. If node's root is not the same as the this's range's root, set the start newRange's start and end to newFocus.
-    if (&node->root() != &m_range->start_container()->root()) {
+    if (&node->root() != &m_range->start_container()->root() || !old_anchor_and_new_focus_have_the_same_shadow_including_root) {
         TRY(new_range->set_start(new_focus_node, new_focus_offset));
         TRY(new_range->set_end(new_focus_node, new_focus_offset));
     }
@@ -319,7 +323,7 @@ WebIDL::ExceptionOr<void> Selection::extend(GC::Ref<DOM::Node> node, unsigned of
     set_range(new_range);
 
     // 9. If newFocus is before oldAnchor, set this's direction to backwards. Otherwise, set it to forwards.
-    if (DOM::position_of_boundary_point_relative_to_other_boundary_point({ new_focus_node, new_focus_offset }, { old_anchor_node, old_anchor_offset }) == DOM::RelativeBoundaryPointPosition::Before) {
+    if (old_anchor_and_new_focus_have_the_same_shadow_including_root && DOM::position_of_boundary_point_relative_to_other_boundary_point({ new_focus_node, new_focus_offset }, { old_anchor_node, old_anchor_offset }) == DOM::RelativeBoundaryPointPosition::Before) {
         m_direction = Direction::Backwards;
     } else {
         m_direction = Direction::Forwards;
@@ -480,6 +484,10 @@ bool Selection::contains_node(GC::Ref<DOM::Node> node, bool allow_partial_contai
     // The method must return false if this is empty or if node's root is not the document associated with this.
     if (!m_range)
         return false;
+    // The range's boundary points can be in a tree that's not connected to the document (for example, inside the shadow
+    // tree of a removed host). Such a range isn't comparable with a node in the document.
+    if (&m_range->start().node->shadow_including_root() != m_document.ptr())
+        return false;
     if (&node->root() != m_document.ptr())
         return false;
 
@@ -505,8 +513,27 @@ bool Selection::contains_node(GC::Ref<DOM::Node> node, bool allow_partial_contai
         && (end_relative_position == DOM::RelativeBoundaryPointPosition::Equal || end_relative_position == DOM::RelativeBoundaryPointPosition::After);
 }
 
+Optional<Utf16String> Selection::try_form_control_selected_text_for_stringifier() const
+{
+    // FIXME: According to https://bugzilla.mozilla.org/show_bug.cgi?id=85686#c69,
+    // sometimes you want the selection from a previously focused form text, probably
+    // when a button or context menu has temporarily stolen focus but page scripts
+    // still expect window.getSelection() to have the goodies.
+
+    auto const* form_element = as_if<HTML::FormAssociatedTextControlElement>(m_document->active_element());
+    if (!form_element)
+        return {};
+    return form_element->selected_text_for_stringifier();
+}
+
 Utf16String Selection::to_string() const
 {
+    // https://w3c.github.io/selection-api/#dom-selection-stringifier
+    // If the selection is within a textarea or input element, it must return the
+    // selected substring in its value.
+    if (auto form_text = try_form_control_selected_text_for_stringifier(); form_text.has_value())
+        return form_text.release_value();
+
     // FIXME: This needs more work to be compatible with other engines.
     //        See https://www.w3.org/Bugs/Public/show_bug.cgi?id=10583
     if (!m_range)
@@ -576,7 +603,13 @@ void Selection::move_offset_to_next_character(bool collapse_selection)
     if (!text_node)
         return;
 
-    if (auto offset = text_node->grapheme_segmenter().next_boundary(focus_offset()); offset.has_value()) {
+    // If there is a selection range, collapse to the end (max) of that range without moving forward
+    if (collapse_selection && !is_collapsed()) {
+        MUST(collapse(text_node, max(anchor_offset(), focus_offset())));
+        m_document->reset_cursor_blink_cycle();
+    }
+    // Otherwise, move forward if possible
+    else if (auto offset = text_node->grapheme_segmenter().next_boundary(focus_offset()); offset.has_value()) {
         if (collapse_selection) {
             MUST(collapse(text_node, *offset));
             m_document->reset_cursor_blink_cycle();
@@ -584,6 +617,7 @@ void Selection::move_offset_to_next_character(bool collapse_selection)
             MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *offset));
         }
     }
+    scroll_focus_into_view();
 }
 
 void Selection::move_offset_to_previous_character(bool collapse_selection)
@@ -592,7 +626,13 @@ void Selection::move_offset_to_previous_character(bool collapse_selection)
     if (!text_node)
         return;
 
-    if (auto offset = text_node->grapheme_segmenter().previous_boundary(focus_offset()); offset.has_value()) {
+    // If there is a selection range, collapse to the start (min) of that range without moving backward
+    if (collapse_selection && !is_collapsed()) {
+        MUST(collapse(text_node, min(anchor_offset(), focus_offset())));
+        m_document->reset_cursor_blink_cycle();
+    }
+    // Otherwise, move backward if possible
+    else if (auto offset = text_node->grapheme_segmenter().previous_boundary(focus_offset()); offset.has_value()) {
         if (collapse_selection) {
             MUST(collapse(text_node, *offset));
             m_document->reset_cursor_blink_cycle();
@@ -600,6 +640,7 @@ void Selection::move_offset_to_previous_character(bool collapse_selection)
             MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *offset));
         }
     }
+    scroll_focus_into_view();
 }
 
 void Selection::move_offset_to_next_word(bool collapse_selection)
@@ -611,21 +652,22 @@ void Selection::move_offset_to_next_word(bool collapse_selection)
     while (true) {
         auto focus_offset = this->focus_offset();
         if (focus_offset == text_node->data().length_in_code_units())
-            return;
+            break;
 
         if (auto offset = text_node->word_segmenter().next_boundary(focus_offset); offset.has_value()) {
-            auto word = text_node->data().substring_view(focus_offset, *offset - focus_offset);
             if (collapse_selection) {
                 MUST(collapse(text_node, *offset));
                 m_document->reset_cursor_blink_cycle();
             } else {
                 MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *offset));
             }
+            auto word = text_node->data().substring_view(focus_offset, *offset - focus_offset);
             if (Unicode::Segmenter::should_continue_beyond_word(word))
                 continue;
         }
         break;
     }
+    scroll_focus_into_view();
 }
 
 void Selection::move_offset_to_previous_word(bool collapse_selection)
@@ -637,18 +679,19 @@ void Selection::move_offset_to_previous_word(bool collapse_selection)
     while (true) {
         auto focus_offset = this->focus_offset();
         if (auto offset = text_node->word_segmenter().previous_boundary(focus_offset); offset.has_value()) {
-            auto word = text_node->data().substring_view(*offset, focus_offset - *offset);
             if (collapse_selection) {
                 MUST(collapse(text_node, *offset));
                 m_document->reset_cursor_blink_cycle();
             } else {
                 MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *offset));
             }
+            auto word = text_node->data().substring_view(*offset, focus_offset - *offset);
             if (Unicode::Segmenter::should_continue_beyond_word(word))
                 continue;
         }
         break;
     }
+    scroll_focus_into_view();
 }
 
 void Selection::move_offset_to_next_line(bool collapse_selection)
@@ -667,6 +710,7 @@ void Selection::move_offset_to_next_line(bool collapse_selection)
     } else {
         MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *new_offset));
     }
+    scroll_focus_into_view();
 }
 
 void Selection::move_offset_to_previous_line(bool collapse_selection)
@@ -685,6 +729,22 @@ void Selection::move_offset_to_previous_line(bool collapse_selection)
     } else {
         MUST(set_base_and_extent(*text_node, anchor_offset(), *text_node, *new_offset));
     }
+    scroll_focus_into_view();
+}
+
+void Selection::scroll_focus_into_view()
+{
+    auto focus = focus_node();
+    if (!focus)
+        return;
+
+    m_document->update_layout(DOM::UpdateLayoutReason::ScrollCursorIntoView);
+
+    auto paintable = focus->paintable();
+    if (!paintable)
+        return;
+
+    paintable->scroll_ancestor_to_offset_into_view(focus_offset());
 }
 
 }

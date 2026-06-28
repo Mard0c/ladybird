@@ -19,6 +19,7 @@
 #include <core/SkBlender.h>
 #include <core/SkColor.h>
 #include <core/SkColorType.h>
+#include <core/SkImage.h>
 #include <core/SkImageFilter.h>
 #include <core/SkPaint.h>
 #include <core/SkPath.h>
@@ -32,7 +33,10 @@ constexpr SkColorType to_skia_color_type(Gfx::BitmapFormat format)
     case Gfx::BitmapFormat::Invalid:
         return kUnknown_SkColorType;
     case Gfx::BitmapFormat::BGRA8888:
+        return kBGRA_8888_SkColorType;
     case Gfx::BitmapFormat::BGRx8888:
+        // FIXME: This is not fully correct, since our bitmap's alpha component might contain garbage data.
+        // If the alpha component does not contain 0xFF, Skia might wrongly use that value as alpha.
         return kBGRA_8888_SkColorType;
     case Gfx::BitmapFormat::RGBA8888:
         return kRGBA_8888_SkColorType;
@@ -136,5 +140,9 @@ constexpr SkSamplingOptions to_skia_sampling_options(ScalingMode scaling_mode)
 SkPath to_skia_path(Path const& path);
 sk_sp<SkImageFilter> to_skia_image_filter(Gfx::Filter const& filter);
 sk_sp<SkBlender> to_skia_blender(Gfx::CompositingAndBlendingOperator compositing_and_blending_operator);
+
+// The returned SkImage references the source bitmap's pixels without copying; the caller
+// must keep `bitmap` alive for as long as the SkImage (or anything derived from it) is in use.
+sk_sp<SkImage> sk_image_from_bitmap(Bitmap const& bitmap, ColorSpace const& color_space);
 
 }

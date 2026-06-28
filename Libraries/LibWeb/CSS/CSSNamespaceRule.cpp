@@ -1,15 +1,17 @@
 /*
  * Copyright (c) 2023, Jonah Shafran <jonahshafran@gmail.com>
+ * Copyright (c) 2025, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGC/Heap.h>
 #include <LibJS/Runtime/Realm.h>
-#include <LibWeb/Bindings/CSSNamespaceRulePrototype.h>
+#include <LibWeb/Bindings/CSSNamespaceRule.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSNamespaceRule.h>
 #include <LibWeb/CSS/Serialize.h>
+#include <LibWeb/Dump.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::CSS {
@@ -55,6 +57,18 @@ String CSSNamespaceRule::serialized() const
     builder.append(";"sv);
 
     return MUST(builder.to_string());
+}
+
+void CSSNamespaceRule::dump(StringBuilder& builder, int indent_levels) const
+{
+    Base::dump(builder, indent_levels);
+
+    dump_indent(builder, indent_levels + 1);
+    builder.appendff("Namespace: {}\n", namespace_uri());
+    if (!prefix().is_empty()) {
+        dump_indent(builder, indent_levels + 1);
+        builder.appendff("Prefix: {}\n", prefix());
+    }
 }
 
 }

@@ -7,7 +7,7 @@
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/Iterator.h>
 #include <LibWeb/Bindings/Intrinsics.h>
-#include <LibWeb/Bindings/URLSearchParamsIteratorPrototype.h>
+#include <LibWeb/Bindings/URLSearchParams.h>
 #include <LibWeb/DOMURL/URLSearchParamsIterator.h>
 
 namespace Web::Bindings {
@@ -58,11 +58,11 @@ JS::Object* URLSearchParamsIterator::next()
 
     auto& entry = m_url_search_params->m_list[m_index++];
     if (m_iteration_kind == JS::Object::PropertyKind::Key)
-        return create_iterator_result_object(vm(), JS::PrimitiveString::create(vm(), entry.name), false);
+        return create_iterator_result_object(vm(), JS::PrimitiveString::create(vm(), Utf16String::from_utf8(entry.name)), false);
     else if (m_iteration_kind == JS::Object::PropertyKind::Value)
-        return create_iterator_result_object(vm(), JS::PrimitiveString::create(vm(), entry.value), false);
+        return create_iterator_result_object(vm(), JS::PrimitiveString::create(vm(), Utf16String::from_utf8(entry.value)), false);
 
-    return create_iterator_result_object(vm(), JS::Array::create_from(realm(), { JS::PrimitiveString::create(vm(), entry.name), JS::PrimitiveString::create(vm(), entry.value) }), false);
+    return create_iterator_result_object(vm(), JS::Array::create_from(realm(), { JS::PrimitiveString::create(vm(), Utf16String::from_utf8(entry.name)), JS::PrimitiveString::create(vm(), Utf16String::from_utf8(entry.value)) }), false);
 }
 
 }
